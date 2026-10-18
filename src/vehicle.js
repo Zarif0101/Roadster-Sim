@@ -62,11 +62,13 @@ export class Vehicle {
       const sr = Math.sin(opts.roll / 2), cr = Math.cos(opts.roll / 2), cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2);
       b.setRotation({ x: sy * sr, y: sy * cr, z: cy * sr, w: cy * cr }, true); // qYaw * qRoll
     }
+    if (opts.rot) b.setRotation(opts.rot, true);
     b.setLinvel(O(opts.vel || [0, 0, 0]), true);
-    b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    b.setAngvel(O(opts.spin || [0, 0, 0]), true);
     this.gas = this.hasThrusters ? val('gasMass') : 0;
     this.unlimited = this.unlimited || false;
-    this.fansOn = false; this.fanLevel = 0;
+    this.fansOn = false; this.fanLevel = 0; this.rescuing = false;
+    if (this.autoRescue === undefined) this.autoRescue = true;
     this.mode = 'MANUAL';
     this.altTarget = 3; this.override = null;
     this.manual.fill(0); this.thrust.fill(0);
@@ -187,12 +189,21 @@ export class Vehicle {
 
     // --- thrusters ---
     this.ctrl = { active: false };
-    let cmd = this.manual.slice();
-    if (this.hasThrusters && this.mode !== 'MANUAL') cmd = this.controller(cmd, { up, fwd, right, q, lin, ang, com, m, g, contacts });
     const gas0 = val('gasMass');
     const pRatio = this.unlimited ? 1 : this.gas / gas0;
     this.pRatio = pRatio;
     const avail = this.hasThrusters && (this.unlimited || this.gas > 0) ? Math.min(1, pRatio / val('regPressure')) : 0;
+    this.availNow = avail;
+    // auto-rescue: falling fast or badly tilted in the air -> level the car and brake the fall
+    const canRescue = this.hasThrusters && this.autoRescue && avail > 0.05;
+    if (!this.rescuing && canRescue && contacts === 0 && this.mode !== 'HOVER' && this.height > 0.4 && (lin[1] < -4 || up[1] < 0.6)) {
+      this.rescuing = true; this.event('Auto-rescue: levelling and braking the fall');
+    }
+    if (this.rescuing && ((contacts >= 3 && up[1] > 0.8) || !canRescue || this.mode === 'HOVER')) {
+      this.rescuing = false; if (contacts >= 3) this.event('Auto-rescue: landed upright');
+    }
+    let cmd = this.manual.slice();
+    if (this.hasThrusters && (this.mode !== 'MANUAL' || this.rescuing)) cmd = this.controller(cmd, { up, fwd, right, q, lin, ang, com, m, g, contacts });
     let totalF = 0;
     THRUSTERS.forEach((t, i) => {
       const F = clamp(cmd[i], 0, 1) * t.max * val('thrustScale') * avail;
@@ -217,60 +228,72 @@ export class Vehicle {
   }
 
   // Flight controller: returns thruster commands (0..1) for the 10 thrusters.
-  // STABILIZE: keep level + damp spin, light lift only while airborne.
-  // HOVER: also hold height above the surface below; W/S tilt, A/D yaw.
+  // STABILIZE: keep level + damp spin, light lift while airborne.
+  // HOVER: also hold height (W/S tilt, A/D yaw). altTarget < 0 means "land".
+  // RESCUE: same as a landing hover, triggered automatically when the car falls.
+  // Allocation gives attitude priority: if a nozzle saturates, total lift is reduced, never the turning moment.
   controller(cmd, s) {
     const { up, fwd, q, lin, ang, m, g, contacts } = s;
     const o = this.override || {};
-    const hover = this.mode === 'HOVER';
+    const rescue = !!this.rescuing, hover = this.mode === 'HOVER' || rescue;
     const airborne = contacts === 0;
-    // desired "up" (tilt forward/back for translation in hover)
+    const k = m / 2300, scale = val('thrustScale') || 1e-6, avail = Math.max(this.availNow ?? 1, 1e-6);
+    const liftMax = THRUSTERS[2].max * scale * avail; // per lift nozzle, right now
+    // desired "up"
     let upT = [0, 1, 0];
-    const tilt = o.tilt ?? (hover ? this.input.pitchCmd * 0.18 : 0);
+    const tilt = o.tilt ?? (this.mode === 'HOVER' && !rescue ? this.input.pitchCmd * 0.18 : 0);
     if (tilt) { const ff = norm([fwd[0], 0, fwd[2]]); upT = norm(add(upT, mul(ff, Math.tan(tilt)))); }
-    // attitude error (axis-angle), robust when fully inverted
+    if (rescue && up[1] > 0.5) { // lean against sideways drift so it touches down rolling straight
+      const side = qRot(q, [1, 0, 0]), vs = dot(lin, side), sf = norm([side[0], 0, side[2]]);
+      upT = norm(add(upT, mul(sf, clamp(-0.03 * vs, -0.2, 0.2))));
+    }
     const c = clamp(dot(up, upT), -1, 1), ang0 = Math.acos(c);
     let axis = cross(up, upT);
     if (len(axis) < 1e-3) axis = ang0 > 1 ? fwd : [0, 0, 0];
     axis = norm(axis);
-    const kp = 9, kd = 5;
+    const kp = rescue ? 22 : 10, kd = rescue ? 9 : 5.5;
     let alphaW = sub(mul(axis, kp * ang0), mul(ang, kd));
-    // remove yaw (handled separately) from the roll/pitch request
-    alphaW = sub(alphaW, mul(up, dot(alphaW, up)));
+    alphaW = sub(alphaW, mul(up, dot(alphaW, up))); // yaw handled separately
     const aB = qRot(qInv(q), alphaW);
-    const k = m / 2300;
     const Mx = aB[0] * INERTIA.x * k, Mz = aB[2] * INERTIA.z * k;
     // vertical thrust request
     let T;
     if (hover) {
-      const vT = o.vy ?? clamp(1.2 * (this.altTarget - this.height), this.height < 2 ? -1.2 : -3, 3);
-      const aY = 2.5 * (vT - lin[1]) + g;
-      T = (m * aY) / Math.max(up[1], 0.3);
-      if (up[1] < 0.2) T = 0; // upside down: lift would push toward the ground, so only differential roll
-    } else {
-      T = airborne ? (o.liftG ?? 0.25) * m * g : 0;
-    }
-    T = Math.max(0, T);
-    // mix front/rear then left/right (lift thrusters T3..T6)
+      let vT, ff = 0;
+      if (rescue || this.altTarget < 0) {
+        // braking profile: the fastest sink rate from which ~45 % of the spare thrust can still stop it
+        // at 0.2 m, touching down at 0.8 m/s. Feed-forward the profile's own deceleration so it doesn't lag.
+        const aBrake = Math.max(1.5, 0.38 * ((4 * liftMax) / m - g));
+        vT = -Math.sqrt(0.64 + 2 * aBrake * Math.max(0, this.height - 0.2));
+        if (lin[1] < vT + 0.5) ff = aBrake;
+      } else vT = o.vy ?? clamp(1.2 * (this.altTarget - this.height), this.height < 2 ? -1.2 : -3, 3);
+      const aY = ff + 4 * (vT - lin[1]) + g;
+      T = up[1] > 0.25 ? (m * aY) / up[1] : 0; // tipped past ~75°: lift would push sideways or down, so only turn
+    } else T = airborne ? (o.liftG ?? 0.25) * m * g : 0;
+    T = clamp(T, 0, 4 * liftMax);
+    // allocation over the 4 lift nozzles
     const zf = THRUSTERS[2].pos[2], zr = THRUSTERS[4].pos[2], xr = THRUSTERS[3].pos[0];
-    const Ff = (Mx + zr * T) / (zr - zf), Fr = T - Ff;
-    const split = (F, Mzp) => [F / 2 - Mzp / (2 * xr), F / 2 + Mzp / (2 * xr)];
-    const MzF = T > 0 ? Mz * (Ff / T) : Mz / 2, MzR = T > 0 ? Mz * (Fr / T) : Mz / 2;
-    const [fl, fr] = split(Ff, MzF), [rl, rr] = split(Fr, MzR);
-    const scale = val('thrustScale') || 1e-6;
-    const lift = [fl, fr, rl, rr].map((F, i) => F / (THRUSTERS[2 + i].max * scale));
-    // yaw: rate target from A/D or scene override
+    const alloc = (Tt) => {
+      const Ff = (Mx + zr * Tt) / (zr - zf), Fr = Tt - Ff;
+      return [Ff / 2 - Mz / 4 / xr, Ff / 2 + Mz / 4 / xr, Fr / 2 - Mz / 4 / xr, Fr / 2 + Mz / 4 / xr];
+    };
+    let f = alloc(T);
+    for (let it = 0; it < 12 && Math.max(...f) > liftMax && T > 0; it++) { T *= 0.85; f = alloc(T); }
+    const lo = Math.min(...f);
+    if (lo < 0 && up[1] > 0.25) { T = Math.min(4 * liftMax, T - 4 * lo); f = alloc(T); }
+    const sat = f.some((x) => x > liftMax * 1.02 || x < -liftMax * 0.02);
+    const lift = f.map((F) => F / liftMax);
+    // yaw: rate target from A/D or scene override (rescue just stops the spin)
     const yawRate = dot(ang, up);
-    const rT = o.yawRate ?? (hover ? this.input.yawCmd * 1.2 : 0);
+    const rT = o.yawRate ?? (this.mode === 'HOVER' && !rescue ? this.input.yawCmd * 1.2 : 0);
     const tauY = INERTIA.y * k * 4 * (rT - yawRate);
-    const per = Math.abs(tauY) / (2.05 * 2 * THRUSTERS[6].max * scale);
+    const per = Math.abs(tauY) / (2.05 * 2 * THRUSTERS[6].max * scale * avail);
     const yawCmd = tauY > 0 ? [per, 0, 0, per] : [0, per, per, 0]; // T7+T10 = yaw left, T8+T9 = yaw right
     const out = cmd.slice();
-    const sat = lift.some((x) => x > 1.001 || x < -0.001) || per > 1;
     lift.forEach((x, i) => { out[2 + i] = Math.max(out[2 + i], clamp(x, 0, 1)); });
     yawCmd.forEach((x, i) => { out[6 + i] = Math.max(out[6 + i], clamp(x, 0, 1)); });
     if (o.boost) { out[0] = Math.max(out[0], o.boost); out[1] = Math.max(out[1], o.boost); }
-    this.ctrl = { active: true, attErrDeg: (ang0 * 180) / Math.PI, Treq: T, saturated: sat, yawRate, yawTarget: rT,
+    this.ctrl = { active: true, rescue, attErrDeg: (ang0 * 180) / Math.PI, Treq: T, saturated: sat || per > 1, yawRate, yawTarget: rT,
       altTarget: hover ? this.altTarget : null };
     return out;
   }

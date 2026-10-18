@@ -108,7 +108,7 @@ export function buildCar() {
   shellMats.forEach((m) => (m.side = THREE.DoubleSide));
   const shell = buildBody(shellMats);
   group.add(shell);
-  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(shell.geometry, 28), new THREE.LineBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.55 }));
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(shell.geometry, 28), new THREE.LineBasicMaterial({ color: 0x3e6ae1, transparent: true, opacity: 0.5 }));
   edges.visible = false; group.add(edges);
 
   const y = (h) => h - CG_H;
@@ -224,18 +224,18 @@ export function buildCar() {
     const curve = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p)));
     const tex = flowTexture(color); tex.repeat.set(curve.getLength() * 3, 1);
     const m = new THREE.Mesh(new THREE.TubeGeometry(curve, 40, r, 8), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.95, color: 0xffffff }));
-    const base = new THREE.Mesh(new THREE.TubeGeometry(curve, 40, r * 0.7, 8), new THREE.MeshBasicMaterial({ color: 0x33414f }));
+    const base = new THREE.Mesh(new THREE.TubeGeometry(curve, 40, r * 0.7, 8), new THREE.MeshBasicMaterial({ color: 0x9aa0a8 }));
     sys.add(base, m); flows.push({ m, tex, kind, idx }); return m;
   };
   const tankOut = [0, y(0.5), 0.78], manifold = [0, y(0.3), 1.2];
   THRUSTERS.forEach((t, i) => {
     const p = t.pos;
-    tube([tankOut, manifold, [p[0] * 0.5, (manifold[1] + p[1]) / 2, (manifold[2] + p[2]) / 2], p], '#9fd8ff', 0.022, 'air', i);
+    tube([tankOut, manifold, [p[0] * 0.5, (manifold[1] + p[1]) / 2, (manifold[2] + p[2]) / 2], p], '#3e6ae1', 0.022, 'air', i);
   });
   const batt = [0, y(0.3), -0.15];
-  tube([batt, [0, y(0.32), -0.7], [0, y(0.35), -1.05]], '#ffd84f', 0.025, 'power', 0);
-  tube([batt, [-0.2, y(0.32), 0.6], [-0.32, y(0.36), 1.3]], '#ffd84f', 0.025, 'power', 1);
-  tube([batt, [0.2, y(0.32), 0.6], [0.32, y(0.36), 1.3]], '#ffd84f', 0.025, 'power', 2);
+  tube([batt, [0, y(0.32), -0.7], [0, y(0.35), -1.05]], '#e8a400', 0.025, 'power', 0);
+  tube([batt, [-0.2, y(0.32), 0.6], [-0.32, y(0.36), 1.3]], '#e8a400', 0.025, 'power', 1);
+  tube([batt, [0.2, y(0.32), 0.6], [0.32, y(0.36), 1.3]], '#e8a400', 0.025, 'power', 2);
   // airflow arrows under fans (drawn as short tubes pointing down/back)
   for (const f of parts.fans) {
     const p = f.position;

@@ -1,34 +1,37 @@
-# Roadster Engineering Lab
+# Roadster Lab
 
-Browser physics simulator of the 2026 Tesla Roadster's thrusters and suction fans. It runs offline.
+A browser physics simulator of the 2026 Tesla Roadster. It covers the cold-gas thrusters, the suction fans, the reveal stunts and auto-rescue. Everything runs offline from one file.
 
-## Run (any laptop)
-Download this repo (Code → Download ZIP), unzip, and double-click **`RoadsterLab.html`**. It opens in Chrome or Edge.
-That one file contains everything: code, the 3D and physics libraries, and the images. No install and no internet needed.
+## Run it
+1. **Code → Download ZIP**, then unzip.
+2. Double-click **`RoadsterLab.html`** to open it in Chrome or Edge.
 
-Developers: `node build.mjs` rebuilds `RoadsterLab.html` from `src/`. `start.bat` serves the multi-file version.
+No install, no server and no internet needed.
 
-## Presentation
-`Roadster_Lab_Presentation.pptx` is the slide deck for the meeting.
+## What's in the folder
+- **`RoadsterLab.html`**: the app. One file holds everything.
+- **`Roadster_Lab_Presentation.pptx`**: the 16-slide deck, with speaker notes.
+- **`GUIDE.md`**: the full guide. It covers every control, screen, stunt, parameter and test, and how the physics works.
 
-## Demo order (about 5 min)
-1. Landing page: what it is, then **Reported / Estimate / Hypothetical**, then limitations.
-2. **Launch simulator.** Drive with WASD.
-3. **Stunts → Reveal ramp:** climb, upside-down hold on fan suction, drop, thruster flip, landing.
-4. **Data:** telemetry, live graph. The purple line is the last recorded run.
-5. **Kickflip:** jump over 5 parked Teslas with a 360° spin.
-6. **Hover:** auto-lands on low gas. Point out that a full tank lasts about 9 s.
-7. **How it works:** power, air and fan flows. Press Shift, H or F and watch them move.
-8. **Export CSV:** simulated data with every parameter and its source.
-9. Home, then **What we could build**: the robotics projects.
+## Quick controls
+| Key | What it does |
+|---|---|
+| W A S D | Drive |
+| Shift | Boost |
+| H | Hover |
+| F | Suction fans |
+| R | Reset everything |
+| C | Camera |
+| Tab | Live panel |
 
-## Check the physics
-`node test/sim-check.mjs` runs free fall, ride height, thruster torque (r × F), gas use, and all 4 scenes headless.
+Start with **Stunts → Reveal ramp**.
 
-## Files
-- `src/params.js`: every number, with its tag and source
-- `src/vehicle.js`: forces and the flight controller
-- `src/world.js`: ramp and lanes
-- `src/scenes.js`: the autopilots
-- `src/car.js`: the 3D model
-- `src/main.js`: the app and UI
+## For developers
+| Command | What it does |
+|---|---|
+| `node build.mjs` | Rebuilds `RoadsterLab.html` from `src/` |
+| `node serve.mjs` | Serves the multi-file version at http://localhost:8080 |
+| `node test/sim-check.mjs` | Physics and stunt tests |
+| `node test/rescue-check.mjs` | Auto-rescue drop tests |
+
+All results are simulated. Designed and directed by Zarif (Robotics Club). Built with Claude (AI).
