@@ -65,7 +65,6 @@ h1 { font-size: clamp(40px, 6.5vw, 84px); line-height: .98; margin: 12px 0 16px;
 .seg { display: inline-flex; background: rgba(255,255,255,.04); border: 1px solid var(--line2); border-radius: 8px; padding: 2px; }
 .seg button { border: 0; background: transparent; padding: 5px 10px; font-size: 12px; border-radius: 6px; }
 .seg button.on { background: rgba(92,200,255,.18); color: #e2f5ff; }
-#topright { position: absolute; top: 14px; right: 14px; display: flex; gap: 8px; }
 #rail { position: absolute; left: 14px; top: 84px; display: flex; flex-direction: column; gap: 6px; padding: 6px; }
 #rail button { width: 112px; text-align: left; border: 0; background: transparent; padding: 9px 10px; display: flex; gap: 8px; align-items: center; border-radius: 8px; }
 #rail button.on { background: rgba(92,200,255,.16); color: #e2f5ff; }
@@ -101,30 +100,41 @@ select { background: #141920; color: var(--text); border: 1px solid var(--line2)
 .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .row button { font-size: 12.5px; }
 
-#cluster { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: stretch; padding: 0; overflow: hidden; }
-#cluster .c { padding: 10px 16px; border-right: 1px solid var(--line); min-width: 92px; }
-#cluster .c:last-child { border-right: 0; }
-#cluster .k { font: 600 10px var(--mono); color: var(--faint); letter-spacing: .1em; text-transform: uppercase; }
-#cluster .v { font: 600 24px var(--mono); line-height: 1.15; }
-#cluster .u { font: 11px var(--mono); color: var(--dim); }
-#cluster .big .v { font-size: 34px; }
-#cluster .tank { min-width: 170px; }
-.bar { height: 5px; background: rgba(255,255,255,.08); border-radius: 3px; margin-top: 6px; overflow: hidden; }
-.bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
-#modepill { position: absolute; bottom: 104px; left: 50%; transform: translateX(-50%); padding: 6px 12px; font: 12px var(--mono); white-space: nowrap; }
-#thrmap { position: absolute; bottom: 14px; right: 14px; padding: 10px 12px; width: 190px; }
-#thrmap .k { font: 600 10px var(--mono); color: var(--faint); letter-spacing: .1em; text-transform: uppercase; display: flex; justify-content: space-between; }
-#thrmap svg { display: block; width: 100%; height: auto; margin-top: 4px; }
-#thrmap .dot { cursor: pointer; }
-#banner { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); max-width: 560px; padding: 10px 16px; text-align: center; display: none; border-color: rgba(92,200,255,.45); }
+.side { position: absolute; top: 14px; right: 14px; bottom: 14px; width: 304px; overflow: auto; padding: 14px 14px 10px; display: flex; flex-direction: column; gap: 12px; }
+.side.collapsed { display: none; }
+.side-head { display: flex; justify-content: space-between; align-items: center; }
+.side-head b { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.iconbtn { padding: 4px 9px; font-size: 12px; }
+#side-tab { position: absolute; right: 14px; top: 14px; display: none; flex-direction: column; align-items: center; gap: 2px; padding: 10px 12px; }
+#side-tab .v { font: 600 22px var(--mono); } #side-tab .u { font: 10px var(--mono); color: var(--dim); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { font: 600 10.5px var(--mono); letter-spacing: .04em; padding: 3px 8px; border-radius: 20px; border: 1px solid var(--line2); color: var(--dim); }
+.chip.on { color: #dff4ff; border-color: var(--accent); background: rgba(92,200,255,.12); }
+.chip.warn { color: #ffe0b0; border-color: var(--warn); background: rgba(255,181,71,.12); }
+.chip.bad { color: #ffd0d0; border-color: var(--bad); background: rgba(255,90,90,.14); }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tile { background: rgba(255,255,255,.035); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.tile .k { font: 600 10px var(--mono); color: var(--faint); letter-spacing: .1em; text-transform: uppercase; }
+.tile .v { font: 600 24px var(--mono); line-height: 1.2; }
+.tile .u { font: 11px var(--mono); color: var(--dim); }
+.tile.wide { grid-column: 1 / -1; }
+.alert { font-size: 12.5px; padding: 7px 10px; border-radius: 8px; background: rgba(255,90,90,.12); border: 1px solid rgba(255,90,90,.45); color: #ffd6d6; display: none; }
+.sec-k { font: 600 10px var(--mono); color: var(--faint); letter-spacing: .1em; text-transform: uppercase; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+#thrsvg { display: block; width: 150px; margin: 0 auto; }
+#thrsvg .dot { cursor: pointer; }
+details summary { cursor: pointer; font: 600 10px var(--mono); color: var(--faint); letter-spacing: .1em; text-transform: uppercase; list-style: none; }
+details summary::before { content: '+ '; } details[open] summary::before { content: '− '; }
+#hint { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); padding: 8px 14px; font-size: 12.5px; color: var(--dim); white-space: nowrap; display: flex; gap: 14px; align-items: center; }
+#hint b { color: var(--text); font-weight: 600; }
+#banner { position: absolute; top: 80px; left: 50%; transform: translateX(-50%); max-width: 560px; padding: 10px 16px; text-align: center; display: none; border-color: rgba(92,200,255,.45); }
 #banner b { display: block; } #banner small { color: #a9cfe6; }
-#toast { position: absolute; top: 76px; left: 50%; transform: translateX(-50%); padding: 7px 14px; font-size: 13px; opacity: 0; transition: opacity .25s; }
+#toast { position: absolute; top: 150px; left: 50%; transform: translateX(-50%); padding: 7px 14px; font-size: 13px; opacity: 0; transition: opacity .25s; }
 #labels { position: fixed; inset: 0; pointer-events: none; z-index: 4; }
 .plabel { position: absolute; transform: translate(-50%, -130%); background: rgba(8,10,14,.85); border: 1px solid var(--line2); border-radius: 6px; padding: 2px 8px; font: 11px var(--mono); white-space: nowrap; }
 #help { position: fixed; inset: 0; background: rgba(3,5,8,.7); z-index: 30; display: none; align-items: center; justify-content: center; }
 #help .card { width: min(560px, 92vw); padding: 22px; }
 #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 40; background: var(--bg); font: 13px var(--mono); color: var(--dim); }
-@media (max-width: 1100px) { #thrmap { display: none; } }
+@media (max-width: 1150px) { #hint { display: none; } }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/" } }
@@ -185,9 +195,9 @@ select { background: #141920; color: var(--text); border: 1px solid var(--line2)
 <div id="hud">
   <div id="brand" class="glass p">
     <div><div class="t">Roadster Lab</div><div class="s">SIMULATION · NOT REAL-WORLD DATA</div></div>
-    <div class="seg" id="cfg"><button data-cfg="performance">Performance</button><button data-cfg="rocket">Rocket</button></div>
+    <div class="seg" id="cfg" title="Performance = reported systems only. Rocket = adds our hypothetical thruster system."><button data-cfg="performance">Performance</button><button data-cfg="rocket">Rocket</button></div>
+    <button id="btn-help" class="iconbtn">Controls</button><button data-go="landing" class="iconbtn">Home</button>
   </div>
-  <div id="topright" class="p"><button id="btn-help">Controls</button><button data-go="landing">Home</button></div>
 
   <nav id="rail" class="glass p">
     <button data-tab="drive"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="1.5"/><path d="M2 8h4.5M9.5 8H14M8 9.5V14"/></svg>Drive</button>
@@ -248,35 +258,39 @@ select { background: #141920; color: var(--text); border: 1px solid var(--line2)
     </div>
 
     <div data-pane="data">
-      <h3>Data</h3><p class="sub">Live readings, a graph, recording and export. Values are simulated.</p>
-      <table class="tel" id="tel"></table>
-      <div class="lbl" style="display:flex;justify-content:space-between;align-items:center">Graph <select id="gvar"></select></div>
-      <canvas id="graph" width="296" height="130"></canvas>
-      <div class="row" style="margin-top:8px"><button id="btn-rec">● Record</button><button id="btn-csv">CSV</button><button id="btn-json">JSON</button></div>
+      <h3>Data</h3><p class="sub">Record a run, compare it with the next one on the side graph (purple line), and export it. Every value is simulated.</p>
+      <div class="row"><button id="btn-rec">● Record</button><button id="btn-csv">Export CSV</button><button id="btn-json">Export JSON</button></div>
       <div class="lbl" style="display:flex;justify-content:space-between;align-items:center">Parameters <button id="btn-preset" style="font-size:11px;padding:3px 8px">Restore</button></div>
       <div id="params"></div>
-      <div class="lbl">Events</div>
-      <div id="events" style="font:11.5px var(--mono);color:var(--dim)"></div>
     </div>
   </aside>
 
   <div id="banner" class="glass p"></div>
   <div id="toast" class="glass"></div>
-  <div id="modepill" class="glass"></div>
-
-  <div id="cluster" class="glass p">
-    <div class="c big"><div class="k">Speed</div><div class="v" id="g-speed">0</div><div class="u">km/h</div></div>
-    <div class="c"><div class="k">Height</div><div class="v" id="g-height">0.0</div><div class="u">m</div></div>
-    <div class="c"><div class="k">Thrust</div><div class="v" id="g-thrust">0</div><div class="u">kN</div></div>
-    <div class="c"><div class="k">Suction</div><div class="v" id="g-fan">0</div><div class="u">kN</div></div>
-    <div class="c tank"><div class="k">Air tank</div><div class="v" id="g-gas">—</div><div class="u" id="g-gas-u"></div><div class="bar"><i id="g-gas-bar"></i></div></div>
-  </div>
-
-  <div id="thrmap" class="glass p">
-    <div class="k"><span>Thrusters</span><span id="thr-total">0 kN</span></div>
-    <svg viewBox="-60 -130 120 260" id="thrsvg"></svg>
-    <div style="font-size:11px;color:var(--faint)">Top view, nose up. Click a nozzle to fire it.</div>
-  </div>
+  <aside id="side" class="side glass p">
+    <div class="side-head"><b>Live</b><button class="iconbtn" id="side-close" title="Hide (Tab)">Hide ›</button></div>
+    <div class="chips" id="chips"></div>
+    <div class="alert" id="alert"></div>
+    <div class="tiles">
+      <div class="tile"><div class="k">Speed</div><div class="v" id="g-speed">0</div><div class="u">km/h</div></div>
+      <div class="tile"><div class="k">Height</div><div class="v" id="g-height">0.0</div><div class="u">m above surface</div></div>
+      <div class="tile"><div class="k">Thrust</div><div class="v" id="g-thrust">0</div><div class="u">kN</div></div>
+      <div class="tile"><div class="k">Suction</div><div class="v" id="g-fan">0</div><div class="u">kN</div></div>
+      <div class="tile wide"><div class="k" style="display:flex;justify-content:space-between"><span>Air tank</span><span id="g-gas-t"></span></div><div class="v" id="g-gas">—</div><div class="u" id="g-gas-u"></div><div class="bar"><i id="g-gas-bar"></i></div></div>
+    </div>
+    <div>
+      <div class="sec-k"><span>Thrusters · click to fire</span><span id="thr-total">0 kN</span></div>
+      <svg viewBox="-60 -130 120 260" id="thrsvg"></svg>
+    </div>
+    <div>
+      <div class="sec-k"><span>Graph</span><select id="gvar"></select></div>
+      <canvas id="graph" width="276" height="110" style="height:110px"></canvas>
+    </div>
+    <details><summary>All readings</summary><table class="tel" id="tel" style="margin-top:6px"></table></details>
+    <div><div class="sec-k"><span>Events</span></div><div id="events" style="font:11.5px var(--mono);color:var(--dim)"></div></div>
+  </aside>
+  <button id="side-tab" class="glass p" title="Show live panel (Tab)"><span class="v" id="tab-speed">0</span><span class="u">km/h</span><span class="u">‹ Live</span></button>
+  <div id="hint" class="glass"></div>
 </div>
 
 <div id="help"><div class="card">
@@ -289,6 +303,7 @@ select { background: #141920; color: var(--text); border: 1px solid var(--line2)
     <span><kbd>F</kbd></span><span>Suction fans on/off</span>
     <span><kbd>R</kbd></span><span>Reset car and every system</span>
     <span><kbd>C</kbd></span><span>Change camera</span>
+    <span><kbd>Tab</kbd></span><span>Show or hide the live panel on the right</span>
     <span><kbd>1</kbd>…<kbd>0</kbd></span><span>Fire one thruster while held (advanced)</span>
   </div>
   <p style="color:var(--dim);margin:14px 0 0">Start with <b>Stunts → Reveal ramp</b>, then open <b>How it works</b>.</p>

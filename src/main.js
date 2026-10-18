@@ -147,7 +147,7 @@ label3d('Reveal ramp', [LOOP.x, 2 * LOOP.R + 2.4, LOOP.z0 - 2], '#5cc8ff');
 label3d('Kickflip lane', [KICK.x, 2.2, 18], '#5cc8ff');
 label3d('0–60 strip', [-60, 1.6, 58], '#5cc8ff');
 // floodlight towers (visual)
-for (const [x, z] of [[12, -50], [-12, -70], [52, -45], [-48, 40], [20, 30]]) {
+for (const [x, z] of [[18, -88], [-14, -78], [66, -82], [-48, 40], [22, 34]]) {
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 12, 8), new THREE.MeshStandardMaterial({ color: 0x2b2f35 }));
   pole.position.set(x, 6, z); scene.add(pole);
   const head = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 0.4), new THREE.MeshBasicMaterial({ color: 0xfff3dc }));
@@ -219,6 +219,7 @@ function toggleFans() { v.fansOn = !v.fansOn; syncButtons(); }
 addEventListener('keydown', (e) => {
   if (!inSim || ['INPUT', 'SELECT'].includes(e.target.tagName)) return;
   if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.key)) e.preventDefault();
+  if (e.code === 'Tab' && !e.repeat) setSide(!sideOpen);
   keys.add(e.code);
   if (e.repeat) return;
   if (activeScene && TAKEOVER.has(e.code)) stopScene('<b>You have control.</b><small>Autopilot off. R resets.</small>');
@@ -467,6 +468,24 @@ $('btn-csv').onclick = () => {
 };
 $('btn-json').onclick = () => { const r = lastRun(); if (!r) return toast('Record a run first.'); dl(`roadster-${Date.now()}.json`, JSON.stringify({ note: 'Simulated data, not real-world measurement', ...r }, null, 1), 'application/json'); };
 
+// ================= sidebar + context hints =================
+const kb = (k) => `<kbd>${k}</kbd>`;
+function hintText() {
+  if (activeScene) return `<b>Autopilot</b> ${kb('W')} or any drive key takes over · ${kb('R')} reset`;
+  if (v.mode === 'HOVER') return `<b>Hovering</b> ${kb('W')}${kb('S')} tilt · ${kb('A')}${kb('D')} turn · ${kb('E')}${kb('Q')} up / down · ${kb('H')} land and drive`;
+  if (v.mode === 'STABILIZE') return `<b>Auto-level</b> keeps the car flat in the air · ${kb('G')} off`;
+  const thr = v.hasThrusters ? ` · ${kb('Shift')} boost · ${kb('H')} hover` : ' · switch to <b>Rocket</b> for thrusters';
+  return `<b>Driving</b> ${kb('W')}${kb('S')} go / brake · ${kb('A')}${kb('D')} steer${thr} · ${kb('F')} fans · ${kb('R')} reset · ${kb('Tab')} live panel`;
+}
+let sideOpen = true;
+try { sideOpen = localStorage.getItem('roadster.side') !== 'closed'; } catch {}
+function setSide(open) {
+  sideOpen = open; $('side').classList.toggle('collapsed', !open); $('side-tab').style.display = open ? 'none' : 'flex';
+  try { localStorage.setItem('roadster.side', open ? 'open' : 'closed'); } catch {}
+}
+$('side-close').onclick = () => setSide(false); $('side-tab').onclick = () => setSide(true);
+setSide(sideOpen);
+
 // ================= per-frame HUD =================
 let uiT = 0, fps = 60, fA = 0, fN = 0;
 function caption(t) {
@@ -492,16 +511,29 @@ function updateHUD(dt) {
     const b = $('g-gas-bar'); b.style.width = (v.unlimited ? 100 : t.gasPct) + '%';
     b.style.background = v.unlimited ? 'var(--hyp)' : t.gasPct < 20 ? 'var(--bad)' : t.gasPct < 40 ? 'var(--warn)' : 'var(--accent)';
   } else { $('g-gas').textContent = '—'; $('g-gas-u').textContent = 'no thrusters'; $('g-gas-bar').style.width = 0; }
-  const mode = { MANUAL: activeScene ? 'AUTOPILOT' : 'DRIVING', STABILIZE: 'AUTO-LEVEL', HOVER: `HOVER · holding ${v.altTarget.toFixed(1)} m` }[v.mode];
-  $('modepill').innerHTML = `${config === 'rocket' ? 'ROCKET' : 'PERFORMANCE'} · ${mode}${v.fansOn ? ' · FANS ON' : ''}${v.ctrl?.saturated ? ' · <span style="color:var(--bad)">AT THRUST LIMIT</span>' : ''}${paused ? ' · PAUSED' : ''}<span style="color:var(--faint)"> · ${fps.toFixed(0)} fps</span>`;
+  $('tab-speed').textContent = t.kmh.toFixed(0);
+  if (v.hasThrusters && !v.unlimited && t.massFlow > 0.5) $('g-gas-t').textContent = `empty in ${(t.gasKg / t.massFlow).toFixed(1)} s`;
+  else if (v.hasThrusters && !v.unlimited) $('g-gas-t').textContent = `≈ ${(t.gasKg / Math.max(1, (t.mass * 9.81) / P.exhaustVel.v)).toFixed(0)} s of hover`;
+  else $('g-gas-t').textContent = '';
+  const chip = (txt, cls = '') => `<span class="chip ${cls}">${txt}</span>`;
+  const modeTxt = activeScene ? 'AUTOPILOT' : { MANUAL: 'DRIVING', STABILIZE: 'AUTO-LEVEL', HOVER: `HOVER ${v.altTarget.toFixed(1)} m` }[v.mode];
+  $('chips').innerHTML = chip(config === 'rocket' ? 'ROCKET' : 'PERFORMANCE', 'on') + chip(modeTxt, v.mode !== 'MANUAL' || activeScene ? 'on' : '')
+    + chip(v.fansOn ? 'FANS ON' : 'FANS OFF', v.fansOn ? 'on' : '') + (v.unlimited ? chip('UNLIMITED AIR', 'warn') : '')
+    + (t.contacts === 0 ? chip('AIRBORNE', 'warn') : '') + (paused ? chip('PAUSED', 'warn') : '') + chip(`${fps.toFixed(0)} FPS`);
+  const alerts = [];
+  if (v.ctrl?.saturated) alerts.push('Thrust limit: the controller wants more push than the nozzles can give.');
+  if (v.hasThrusters && !v.unlimited && t.gasPct < 25) alerts.push(t.gasPct <= 0.1 ? 'Air tank empty: thrusters are dead. Press R to refill.' : 'Air low: below 20 % pressure the nozzles lose thrust.');
+  if (v.upY < -0.5 && t.contacts > 0 && t.fankN < 5) alerts.push('Upside down without suction: it will fall.');
+  $('alert').style.display = alerts.length ? 'block' : 'none'; $('alert').textContent = alerts.join(' ');
+  $('hint').innerHTML = hintText();
   $('thr-total').textContent = `${t.thrustkN.toFixed(1)} kN`;
   thrDots.forEach((d, i) => { const f = v.thrust[i] / THRUSTERS[i].max; d.glow.setAttribute('r', f > 0.01 ? 7 + 9 * f : 0); d.ring.setAttribute('fill', f > 0.01 ? '#ff8a3d' : '#141920'); });
-  if (tab === 'systems') $('caption').innerHTML = caption(t);
-  if (tab === 'data') {
-    TEL.forEach(([, f, u], i) => ($('tv' + i).textContent = `${f(t)} ${u}`));
-    $('events').innerHTML = v.events.slice(-10).reverse().map((e) => `${e.t.toFixed(1)} s · ${e.text}`).join('<br>');
+  if (sideOpen) {
     drawGraph();
+    if ($('tel').closest('details').open) TEL.forEach(([, f, u], i) => ($('tv' + i).textContent = `${f(t)} ${u}`));
+    $('events').innerHTML = v.events.slice(-5).reverse().map((e) => `${e.t.toFixed(1)} s · ${e.text}`).join('<br>') || 'Nothing yet';
   }
+  if (tab === 'systems') $('caption').innerHTML = caption(t);
 }
 
 // ================= loop =================
@@ -526,4 +558,4 @@ function frame(now) {
 resetAll('pad'); syncButtons();
 $('loading').remove();
 requestAnimationFrame(frame);
-window.lab = { v, car, camera, setCam, setView, startScene, go, shot: (x, y, z) => { fixedOff.set(x, y, z); camMode = 'fixed'; camPos.copy(car.group.position).add(fixedOff); look.copy(car.group.position); } }; // debug hook
+window.lab = { renderer, scene, resize, v, car, camera, setCam, setView, startScene, go, shot: (x, y, z) => { fixedOff.set(x, y, z); camMode = 'fixed'; camPos.copy(car.group.position).add(fixedOff); look.copy(car.group.position); } }; // debug hook
