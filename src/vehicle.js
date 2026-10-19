@@ -1,8 +1,13 @@
-// Vehicle physics: raycast suspension, tyres, drag, fans, thrusters, flight controller.
-// Rapier integrates the rigid body; every force below is computed here and applied
-// as an impulse at its real point, so torque comes out of r × F automatically.
-// No three.js import, so this file also runs headless in Node for tests.
-import { P, THRUSTERS, WHEELS, SUSP_REST, FRONT_TORQUE_SHARE, INERTIA, val } from './params.js';
+// Vehicle physics: raycast suspension with anti-roll bars, Magic Formula tyres with wheel spin and
+// relaxation, tri-motor powertrain + battery, ABS / traction control / stability control, aero with the
+// active wing, suction fans, cold-gas thrusters with a blowdown tank, and the flight controller.
+// Rapier integrates the rigid body; every force below is applied at its real point,
+// so torque comes out of r × F automatically. No three.js import, so this also runs headless in Node.
+import { P, TRIMS, THRUSTERS, WHEELS, SUSP_REST, INERTIA, val } from './params.js';
+import * as tyre from './physics/tyre.js';
+import { driveTorques, brakeTorques, battery, newBattery } from './physics/powertrain.js';
+import { newTank, tankStep, massAt } from './physics/coldgas.js';
+import { RHO, newWing, wingLogic, aeroForces, fanSuction } from './physics/aero.js';
 
 // ---- tiny vector helpers (arrays [x,y,z]) ----
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -24,7 +29,9 @@ const qInv = (q) => ({ x: -q.x, y: -q.y, z: -q.z, w: q.w });
 export const vec = { add, sub, mul, dot, cross, len, norm, qRot };
 
 export const MODES = ['MANUAL', 'STABILIZE', 'HOVER'];
-const RHO = 1.225;
+const SUB = 8;              // tyre / wheel-spin sub-steps per physics step (960 Hz at 120 Hz)
+const SIDE_CA = 4.5;        // m², side area × side-force coefficient (crosswind)
+const TOP_CA = 7.0;         // m², plan area × drag coefficient when falling flat
 const BODY_HALF = [0.95, 0.33, 2.15];
 
 export class Vehicle {
@@ -39,20 +46,30 @@ export class Vehicle {
     this.collider = world.createCollider(
       R.ColliderDesc.convexHull(new Float32Array(pts)).setDensity(0).setFriction(0.6).setRestitution(0.1),
       this.body);
-    this.wheels = WHEELS.map((w) => ({ ...w, comp: 0, prevComp: 0, contact: false, load: 0, spin: 0, slip: 0, point: null }));
+    this.wheels = WHEELS.map((w) => ({ ...w, comp: 0, prevComp: 0, contact: false, load: 0, spin: 0, slip: 0, point: null,
+      omega: 0, kap: 0, tanA: 0, I: val('wheelInertia'), tcCut: 0, absCut: 0, vx: 0, steer: 0, Fx: 0, Fy: 0 }));
     this.input = { throttle: 0, brake: 0, steer: 0, hoverUp: 0, pitchCmd: 0, yawCmd: 0 };
     this.manual = new Array(THRUSTERS.length).fill(0); // manual thruster commands 0..1
     this.thrust = new Array(THRUSTERS.length).fill(0); // actual force, N
+    this.valve = new Array(THRUSTERS.length).fill(0);  // valve opening after solenoid lag
     this.steerAngle = 0;
+    this.tc = true; this.abs = true; this.esc = true; this.regen = true; this.autoHold = true;
     this.setConfig(config);
     this.reset([0, 1, 0], 0);
   }
 
   setConfig(c) {
-    this.config = c; // 'performance' (reported systems only) | 'rocket' (experimental thrusters)
-    this.hasThrusters = c === 'rocket';
+    this.config = TRIMS[c] ? c : 'rocket';
+    this.trim = TRIMS[this.config];
+    this.nozzleOn = THRUSTERS.map((_, i) => this.trim.nozzles.includes(i));
+    this.hasThrusters = this.trim.nozzles.length > 0;
+    this.hasLift = this.nozzleOn[2];
+    this.gas0 = this.trim.tank ? massAt(val('tankPressure') * 1e5, 293.15, this.trim.tank / 1000) : 0;
     this.mode = 'MANUAL';
   }
+
+  get gas() { return this.tank ? this.tank.m : 0; }
+  set gas(m) { if (this.tank) this.tank.m = m; }
 
   reset(pos, yaw = 0, opts = {}) {
     const b = this.body;
@@ -65,23 +82,27 @@ export class Vehicle {
     if (opts.rot) b.setRotation(opts.rot, true);
     b.setLinvel(O(opts.vel || [0, 0, 0]), true);
     b.setAngvel(O(opts.spin || [0, 0, 0]), true);
-    this.gas = this.hasThrusters ? val('gasMass') : 0;
+    this.tank = newTank(this.trim.tank);
+    this.battery = newBattery();
+    this.wing = newWing();
     this.unlimited = this.unlimited || false;
-    this.fansOn = false; this.fanLevel = 0; this.rescuing = false;
+    this.fansOn = false; this.fanLevel = 0; this.rescuing = false; this.fan = { force: 0, kw: 0, seal: 0, dP: 0 };
     if (this.autoRescue === undefined) this.autoRescue = true;
     this.mode = 'MANUAL';
     this.altTarget = 3; this.override = null;
-    this.manual.fill(0); this.thrust.fill(0);
-    this.wheels.forEach((w) => { w.comp = w.prevComp = 0; w.contact = false; });
+    this.manual.fill(0); this.thrust.fill(0); this.valve.fill(0);
+    const fwdV = [-Math.sin(yaw), 0, -Math.cos(yaw)], v0 = opts.vel ? dot(opts.vel, fwdV) : 0;
+    this.wheels.forEach((w) => { w.comp = w.prevComp = 0; w.contact = false; w.omega = v0 / val('wheelRadius'); w.kap = w.tanA = 0; w.tcCut = w.absCut = 0; w.I = val('wheelInertia'); });
     this.prevVel = [0, 0, 0]; this.accel = [0, 0, 0];
     this.time = 0; this.t60 = null; this.launchT = null;
-    this.events = [];
-    this.up = [0, 1, 0]; this.fwd = [-Math.sin(yaw), 0, -Math.cos(yaw)]; this.right = [Math.cos(yaw), 0, -Math.sin(yaw)];
-    this.height = 0; this.speed = 0; this.vLong = 0; this.forces = [];
+    this.events = []; this.availNow = this.hasThrusters ? 1 : 0; this.pRatio = this.hasThrusters ? 1 : 0;
+    this.up = [0, 1, 0]; this.fwd = fwdV; this.right = [Math.cos(yaw), 0, -Math.sin(yaw)];
+    this.height = 0; this.speed = 0; this.vLong = 0; this.forces = []; this.contacts = 0;
+    this.gust = [0, 0, 0]; this.gustT = 0; this.escActive = 0; this.latG = 0; this.holding = this.autoHold && !opts.vel;
     this.updateMass(true);
   }
 
-  get mass() { return val('massDry') + this.gas; }
+  get mass() { return val('massDry') + this.trim.extraMass + this.gas; }
 
   updateMass(force) {
     const m = this.mass;
@@ -102,125 +123,193 @@ export class Vehicle {
     return { toi, n: V(hit.normal), p: add(origin, mul(dir, toi)) };
   }
 
+  // Keyboard steering filter: full key gives the road-wheel angle that just reaches the front tyres'
+  // peak grip at this speed (what a skilled driver dials in), never more than full lock.
+  steerLimit(speed) {
+    const L = val('wheelbase'), mu = val('tyreMu') * 0.95, g = val('gravity');
+    return Math.min((val('maxSteer') * Math.PI) / 180, Math.atan((L * mu * g) / Math.max(1, speed * speed)) + 0.5 * Math.atan(tyre.PEAK.y.at));
+  }
+
   // One fixed physics step. Computes all forces, applies them, records them for display.
   step(dt) {
     const b = this.body, q = b.rotation(), com = V(b.translation());
     const lin = V(b.linvel()), ang = V(b.angvel());
-    const m = this.mass, g = val('gravity');
+    const m = this.mass, g = val('gravity'), r = val('wheelRadius');
     const up = qRot(q, [0, 1, 0]), fwd = qRot(q, [0, 0, -1]), right = qRot(q, [1, 0, 0]);
     const forces = []; this.forces = forces;
-    const apply = (type, F, p) => {
-      b.applyImpulseAtPoint(O(mul(F, dt)), O(p), true);
-      forces.push({ type, F, p });
-    };
+    // Forces (not impulses): Rapier integrates added forces inside this step together with gravity.
+    // Impulses land one step late, which shows up as a slow creep on slopes.
+    b.resetForces(true); b.resetTorques(true);
+    const apply = (type, F, p) => { b.addForceAtPoint(O(F), O(p), true); forces.push({ type, F, p }); };
     this.time += dt;
     forces.push({ type: 'gravity', F: [0, -m * g, 0], p: com });
+    const speed = len(lin), vLongBody = dot(lin, fwd);
 
-    // --- steering (speed-sensitive) ---
-    const speed = len(lin);
-    const target = this.input.steer * 0.55 / (1 + speed / 12);
-    this.steerAngle += clamp(target - this.steerAngle, -2.5 * dt, 2.5 * dt);
+    // --- steering: speed-sensitive filter, rate-limited actuator, Ackermann geometry ---
+    const target = clamp(this.input.steer, -1, 1) * this.steerLimit(Math.abs(vLongBody));
+    this.steerAngle += clamp(target - this.steerAngle, -3 * dt, 3 * dt);
+    const L = val('wheelbase'), tr = val('track'), d = this.steerAngle;
+    const ack = (inner) => { if (Math.abs(d) < 1e-4) return d; const c = L / Math.tan(Math.abs(d)); return Math.sign(d) * Math.atan(L / (c + (inner ? -tr / 2 : tr / 2))); };
+    this.wheels[0].steer = ack(d > 0); this.wheels[1].steer = ack(d < 0); // + steer = left, so left wheel is inner
+    this.wheels[2].steer = this.wheels[3].steer = 0;
 
-    // --- suspension + tyres ---
-    const r = val('wheelRadius'), mu = val('tyreMu');
-    const maxDrive = Math.min(val('wheelTorque') / r, (val('peakPower') * 1000) / Math.max(speed, 1));
-    const vLongBody = dot(lin, fwd);
-    let contacts = 0;
-    for (const w of this.wheels) {
-      const hp = add(com, qRot(q, w.pos)), down = mul(up, -1);
-      const hit = this.ray(hp, down, SUSP_REST + r);
+    // --- suspension: raycast per corner, spring + bump/rebound damper, anti-roll bars ---
+    const down = mul(up, -1), kS = val('springRate') * (1 + 2 * this.fanLevel); // adaptive: stiffer under fan load
+    const hits = this.wheels.map((w) => {
+      const hp = add(com, qRot(q, w.pos)), hit = this.ray(hp, down, SUSP_REST + r);
       w.prevComp = w.comp;
-      if (!hit) { w.contact = false; w.comp = 0; w.load = 0; w.point = add(hp, mul(down, SUSP_REST + r)); continue; }
-      contacts++;
-      w.contact = true;
-      w.comp = clamp(SUSP_REST - (hit.toi - r), 0, SUSP_REST);
-      w.point = hit.p;
-      const cVel = (w.comp - w.prevComp) / dt;
-      const kS = val('springRate') * (1 + 2 * this.fanLevel); // adaptive: stiffer under fan load
-      let Fs = kS * w.comp + val('damping') * cVel;
+      if (!hit) { w.contact = false; w.comp = 0; w.load = 0; w.point = add(hp, mul(down, SUSP_REST + r)); return null; }
+      w.contact = true; w.comp = clamp(SUSP_REST - (hit.toi - r), 0, SUSP_REST); w.point = hit.p;
+      const cv = (w.comp - w.prevComp) / dt;
+      let Fs = kS * w.comp + cv * (cv > 0 ? val('dampBump') : val('dampRebound'));
       if (w.comp > 0.85 * SUSP_REST) Fs += 10 * kS * (w.comp - 0.85 * SUSP_REST); // bump stop
-      Fs = Math.max(0, Fs);
-      const n = hit.n;
-      // wheel heading
-      const st = w.front ? this.steerAngle : 0;
-      const hb = qRot(q, [-Math.sin(st), 0, -Math.cos(st)]);
-      const f = norm(sub(hb, mul(n, dot(n, hb))));
-      const side = norm(cross(n, f));
-      const vc = add(lin, cross(ang, sub(hit.p, com)));
-      const vLong = dot(vc, f), vLat = dot(vc, side);
-      const share = m / 4, N = Fs, muN = mu * N;
-      // longitudinal
-      let Fx = 0, th = this.input.throttle;
-      if (th !== 0) {
-        const axle = w.front ? FRONT_TORQUE_SHARE / 2 : (1 - FRONT_TORQUE_SHARE) / 2;
-        Fx += th * maxDrive * axle * (th < 0 ? 0.3 : 1);
-      }
-      if (this.input.brake > 0) Fx += -Math.sign(vLong) * Math.min(this.input.brake * muN, Math.abs(vLong) * share / dt * 0.5);
-      if (th === 0 && this.input.brake === 0) Fx += -vLong * 25 - Math.sign(vLong) * Math.min(0.012 * N, Math.abs(vLong) * share / dt * 0.5);
-      // lateral: saturating slip-angle model, capped so it can't overshoot at low speed
-      const alpha = Math.atan2(vLat, Math.abs(vLong) + 2);
-      let Fy = -muN * Math.tanh(alpha / 0.08);
-      const cap = Math.abs(vLat) * share / dt * 0.8;
-      Fy = clamp(Fy, -cap, cap);
-      // friction circle
-      const Ft = Math.hypot(Fx, Fy);
-      w.slip = muN > 0 ? Ft / muN : 0;
-      if (Ft > muN && Ft > 0) { Fx *= muN / Ft; Fy *= muN / Ft; }
-      w.load = N;
-      w.spin += (vLong / r) * dt;
-      apply('suspension', mul(n, Fs), hit.p);
-      apply('tyre', add(mul(f, Fx), mul(side, Fy)), hit.p);
+      w.Fs = Fs; return hit;
+    });
+    for (const [a, c, k] of [[0, 1, val('arbFront')], [2, 3, val('arbRear')]]) {
+      if (!hits[a] || !hits[c]) continue;
+      const F = k * (this.wheels[a].comp - this.wheels[c].comp);
+      this.wheels[a].Fs += F; this.wheels[c].Fs -= F;
     }
+    let contacts = 0;
+    this.wheels.forEach((w, i) => { if (hits[i]) { contacts++; w.Fs = Math.max(0, w.Fs); w.load = w.Fs; } });
     this.contacts = contacts;
     if (contacts === 0 && this.wasGrounded) this.event('Airborne');
     if (contacts > 0 && this.wasGrounded === false) this.event('Touchdown');
     this.wasGrounded = contacts > 0;
 
-    // --- aerodynamic drag ---
-    if (speed > 0.1) apply('drag', mul(lin, -0.5 * RHO * val('cd') * val('frontalArea') * speed), com);
+    // --- wheel frames and contact-patch velocities ---
+    const frames = this.wheels.map((w, i) => {
+      const hit = hits[i]; if (!hit) return null;
+      const hb = qRot(q, [-Math.sin(w.steer), 0, -Math.cos(w.steer)]), n = hit.n;
+      const f = norm(sub(hb, mul(n, dot(n, hb)))), side = norm(cross(n, f));
+      const vc = add(lin, cross(ang, sub(hit.p, com)));
+      w.vx = dot(vc, f);
+      return { f, side, n, p: hit.p, vx: w.vx, vy: dot(vc, side) };
+    });
 
-    // --- suction fans (reported up to 2 g). Only work while the underbody is near a surface. ---
+    // --- driver aids and powertrain ---
+    let thr = clamp(this.input.throttle, -1, 1);
+    let brake = clamp(this.input.brake, 0, 1);
+    if (thr < 0 && vLongBody > 1) { brake = Math.max(brake, -thr); thr = 0; } // pedal semantics: 'back' while rolling forward = brake
+    // vehicle hold: once stopped with no throttle, the brakes stay on until the driver accelerates
+    if (thr !== 0) this.holding = false;
+    else if (contacts >= 3 && Math.abs(vLongBody) < 1) this.holding = this.autoHold; // also catches a slow roll-back (hill hold)
+    if (this.holding) brake = Math.max(brake, 0.4);
+    const extra = [0, 0, 0, 0];
+    this.escActive = 0;
+    let thrScale = 1;
+    if (this.esc && contacts >= 3 && Math.abs(vLongBody) > 4) {
+      // stability control: compare yaw rate with what the steering asks for (bicycle model, grip-limited)
+      const vx = Math.abs(vLongBody), yr = dot(ang, up), mu = val('tyreMu');
+      let rRef = (vLongBody * d) / (L * (1 + (vx * vx) / 900));
+      rRef = clamp(rRef, (-0.9 * mu * g) / vx, (0.9 * mu * g) / vx);
+      const e = yr - rRef, th = 0.07 + 0.12 * Math.abs(rRef);
+      if (Math.abs(e) > th) {
+        const amt = Math.min(3500, 9000 * (Math.abs(e) - th)), left = (Math.abs(yr) > 0.02 ? yr : rRef) > 0;
+        if (Math.abs(yr) > Math.abs(rRef)) { extra[left ? 1 : 0] += amt; thrScale = 1 - Math.min(0.8, 3 * (Math.abs(e) - th)); } // oversteer: brake outer front
+        else extra[left ? 2 : 3] += amt * 0.6; // understeer: brake inner rear
+        this.escActive = 1;
+      }
+    }
+    if (vLongBody * 3.6 > val('topSpeed') && thr > 0) thrScale *= Math.max(0, 1 - (vLongBody * 3.6 - val('topSpeed')) / 5); // limiter
+    let Td = driveTorques(this, thr * thrScale);
+    const Tb = brakeTorques(brake, extra);
+    const lim = { tc: this.tc ? 1.15 * tyre.PEAK.x.at : 0, abs: this.abs ? 1.1 * tyre.PEAK.x.at : 0 };
+    // battery: electrical power for motors (+ fans) decides how much torque it can actually supply
+    const eff = val('motorEff');
+    const mechKW = Td.reduce((s, T, i) => s + T * this.wheels[i].omega, 0) / 1000;
+    const fanKW = this.fan.kw || 0;
+    const elecKW = (mechKW > 0 ? mechKW / eff : mechKW * eff) + fanKW;
+    const bs = battery(this.battery, elecKW, dt);
+    if (bs < 1 && mechKW > 0) Td = Td.map((T) => T * bs);
+
+    // --- tyres: sub-stepped wheel spin + relaxation; average force over the step ---
+    const h = dt / SUB;
+    this.wheels.forEach((w, i) => {
+      const fr = frames[i];
+      if (!fr) { // in the air: wheel spins freely, slip states relax
+        for (let s = 0; s < SUB; s++) {
+          w.omega += (h * Td[i]) / w.I; // in the air: free spin
+          const dB = (Tb[i] * h) / w.I; w.omega = Math.abs(w.omega) <= dB ? 0 : w.omega - Math.sign(w.omega) * dB;
+        }
+        w.kap *= 0.9; w.tanA *= 0.9; w.slip = 0; w.Fx = w.Fy = 0;
+        w.spin += w.omega * dt; return;
+      }
+      let sx = 0, sy = 0, util = 0;
+      let tcN = 0, absN = 0;
+      for (let s = 0; s < SUB; s++) { const o = tyre.substep(w, fr.vx, fr.vy, w.Fs, Td[i], Tb[i], r, h, lim); sx += o.Fx; sy += o.Fy; util = o.util; tcN += w.tcOn; absN += w.absOn; }
+      w.tcCut = tcN / SUB; w.absCut = absN / SUB;
+      w.Fx = sx / SUB; w.Fy = sy / SUB; w.slip = util; w.spin += w.omega * dt;
+      apply('suspension', mul(fr.n, w.Fs), fr.p);
+      apply('tyre', add(mul(fr.f, w.Fx), mul(fr.side, w.Fy)), fr.p);
+    });
+    this.tcActive = this.wheels.some((w) => w.tcCut > 0.05) ? 1 : 0;
+    this.absActive = this.wheels.some((w) => w.absCut > 0.05) ? 1 : 0;
+
+    // --- aerodynamics (relative to the wind, with gusts) ---
+    this.gustT -= dt;
+    if (this.gustT <= 0) { this.gustT = 0.6 + Math.random(); const gs = val('windGust'); this.gustTarget = [(Math.random() * 2 - 1) * gs, 0, (Math.random() * 2 - 1) * gs * 0.5]; }
+    if (this.gustTarget) this.gust = add(this.gust, mul(sub(this.gustTarget, this.gust), Math.min(1, dt * 2)));
+    const wind = add([val('windSpeed'), 0, 0], this.gust); this.windVec = wind;
+    const air = sub(lin, wind), uF = dot(air, fwd), uS = dot(air, right), uU = dot(air, up);
+    const ride = this.underGap ?? 0.3;
+    wingLogic(this.wing, { speed: Math.max(0, uF), brake, latG: this.latG, airborne: contacts === 0 && this.height > 0.5, fans: this.fansOn, dt });
+    const aero = aeroForces(this.wing, Math.max(0, uF), Math.max(0, ride - 0.24));
+    if (Math.abs(uF) > 0.1) apply('drag', mul(fwd, -Math.sign(uF) * aero.drag), com);
+    if (Math.abs(uS) > 0.1) apply('drag', mul(right, -0.5 * RHO * SIDE_CA * uS * Math.abs(uS)), add(com, mul(up, 0.1)));
+    if (Math.abs(uU) > 0.5) apply('drag', mul(up, -0.5 * RHO * TOP_CA * uU * Math.abs(uU)), com);
+    if (aero.bodyDown > 1) {
+      apply('drag', mul(up, -aero.bodyDown * 0.45), add(com, mul(fwd, 1.2)));
+      apply('drag', mul(up, -aero.bodyDown * 0.55), add(com, mul(fwd, -1.45)));
+    }
+    if (aero.wingDown > 1) apply('drag', mul(up, -aero.wingDown), add(com, add(mul(fwd, -1.9), mul(up, 0.5))));
+    this.downforce = aero.bodyDown + aero.wingDown; this.dragF = aero.drag;
+
+    // --- suction fans: fan curve against skirt leakage; only works near a surface ---
     this.fanLevel += ((this.fansOn ? 1 : 0) - this.fanLevel) * Math.min(1, dt / 0.3);
     const under = this.ray(add(com, mul(up, -0.25)), mul(up, -1), 1.2);
     this.underGap = under ? under.toi : null;
-    this.seal = under ? clamp((0.8 - under.toi) / 0.5, 0, 1) : 0;
-    this.fanForce = val('fanForce') * val('massDry') * g * this.fanLevel * this.seal;
+    this.fan = fanSuction(this.fanLevel, under ? under.toi : 9);
+    this.seal = this.fan.seal; this.fanForce = this.fan.force;
     if (this.fanForce > 1) apply('fan', mul(up, -this.fanForce), add(com, mul(up, -0.25)));
 
     // --- thrusters ---
     this.ctrl = { active: false };
-    const gas0 = val('gasMass');
-    const pRatio = this.unlimited ? 1 : this.gas / gas0;
-    this.pRatio = pRatio;
-    const avail = this.hasThrusters && (this.unlimited || this.gas > 0) ? Math.min(1, pRatio / val('regPressure')) : 0;
-    this.availNow = avail;
-    // auto-rescue: falling fast or badly tilted in the air -> level the car and brake the fall
-    const canRescue = this.hasThrusters && this.autoRescue && avail > 0.05;
+    const avail = this.hasThrusters ? this.availNow : 0;
+    const canRescue = this.hasLift && this.autoRescue && avail > 0.05;
     if (!this.rescuing && canRescue && contacts === 0 && this.mode !== 'HOVER' && this.height > 0.4 && (lin[1] < -4 || up[1] < 0.6)) {
       this.rescuing = true; this.event('Auto-rescue: levelling and braking the fall');
     }
     if (this.rescuing && ((contacts >= 3 && up[1] > 0.8) || !canRescue || this.mode === 'HOVER')) {
       this.rescuing = false; if (contacts >= 3) this.event('Auto-rescue: landed upright');
     }
+    if (!this.hasLift && this.mode !== 'MANUAL') this.mode = 'MANUAL';
     let cmd = this.manual.slice();
-    if (this.hasThrusters && (this.mode !== 'MANUAL' || this.rescuing)) cmd = this.controller(cmd, { up, fwd, right, q, lin, ang, com, m, g, contacts });
+    if (this.hasLift && (this.mode !== 'MANUAL' || this.rescuing)) cmd = this.controller(cmd, { up, fwd, right, q, lin, ang, com, m, g, contacts });
+    let Fcmd = 0;
+    THRUSTERS.forEach((t, i) => {
+      const want = this.nozzleOn[i] ? clamp(cmd[i], 0, 1) : 0;
+      this.valve[i] += (want - this.valve[i]) * Math.min(1, dt / 0.02); // solenoid valve lag ~20 ms
+      Fcmd += this.valve[i] * t.max * val('thrustScale');
+    });
+    const ts = this.hasThrusters ? tankStep(this.tank, Fcmd, this.unlimited, dt) : { avail: 0, mdot: 0, ve: 0 };
     let totalF = 0;
     THRUSTERS.forEach((t, i) => {
-      const F = clamp(cmd[i], 0, 1) * t.max * val('thrustScale') * avail;
+      const F = this.valve[i] * t.max * val('thrustScale') * avail;
       this.thrust[i] = F;
-      if (F > 0) { totalF += F; apply('thruster', qRot(q, mul(t.dir, F)), add(com, qRot(q, t.pos))); }
+      if (F > 1) { totalF += F; apply('thruster', qRot(q, mul(t.dir, F)), add(com, qRot(q, t.pos))); }
     });
+    const gasBefore = this.availNow;
+    this.availNow = ts.avail; this.ve = ts.ve;
+    this.pRatio = this.hasThrusters ? this.tank.p / (val('tankPressure') * 1e5) : 0;
     this.totalThrust = totalF;
-    this.massFlow = totalF / val('exhaustVel');
-    if (!this.unlimited && this.hasThrusters) {
-      const before = this.gas;
-      this.gas = Math.max(0, this.gas - this.massFlow * dt);
-      if (before > 0 && this.gas === 0) this.event('Gas depleted');
-    }
+    this.massFlow = ts.mdot;
+    if (this.hasThrusters && !this.unlimited && gasBefore > 0 && this.gas <= 0.01) this.event('Gas depleted');
     this.updateMass(false);
 
     // --- derived telemetry ---
     this.accel = mul(sub(lin, this.prevVel), 1 / dt); this.prevVel = lin;
+    this.latG += (dot(this.accel, right) / g - this.latG) * Math.min(1, dt * 8); // filtered like a real IMU readout
     const ground = this.ray(com, [0, -1, 0], 200);
     this.height = ground ? ground.toi - 0.49 : 200;
     if (this.launchT !== null && this.t60 === null && speed >= 26.82) { this.t60 = this.time - this.launchT; this.event(`0–60 mph in ${this.t60.toFixed(2)} s`); }
@@ -251,7 +340,7 @@ export class Vehicle {
     let axis = cross(up, upT);
     if (len(axis) < 1e-3) axis = ang0 > 1 ? fwd : [0, 0, 0];
     axis = norm(axis);
-    const kp = rescue ? 22 : 10, kd = rescue ? 9 : 5.5;
+    const kp = rescue ? 2.2 * val('attKp') : val('attKp'), kd = rescue ? 1.64 * val('attKd') : val('attKd');
     let alphaW = sub(mul(axis, kp * ang0), mul(ang, kd));
     alphaW = sub(alphaW, mul(up, dot(alphaW, up))); // yaw handled separately
     const aB = qRot(qInv(q), alphaW);
@@ -261,13 +350,13 @@ export class Vehicle {
     if (hover) {
       let vT, ff = 0;
       if (rescue || this.altTarget < 0) {
-        // braking profile: the fastest sink rate from which ~45 % of the spare thrust can still stop it
+        // braking profile: the fastest sink rate from which ~55 % of the spare thrust can still stop it
         // at 0.2 m, touching down at 0.8 m/s. Feed-forward the profile's own deceleration so it doesn't lag.
-        const aBrake = Math.max(1.5, 0.38 * ((4 * liftMax) / m - g));
+        const aBrake = Math.max(1.5, 0.55 * ((4 * liftMax) / m - g));
         vT = -Math.sqrt(0.64 + 2 * aBrake * Math.max(0, this.height - 0.2));
         if (lin[1] < vT + 0.5) ff = aBrake;
-      } else vT = o.vy ?? clamp(1.2 * (this.altTarget - this.height), this.height < 2 ? -1.2 : -3, 3);
-      const aY = ff + 4 * (vT - lin[1]) + g;
+      } else vT = o.vy ?? clamp(val('altKp') * (this.altTarget - this.height), this.height < 2 ? -1.2 : -3, 3);
+      const aY = ff + val('vzKp') * (vT - lin[1]) + g;
       T = up[1] > 0.25 ? (m * aY) / up[1] : 0; // tipped past ~75°: lift would push sideways or down, so only turn
     } else T = airborne ? (o.liftG ?? 0.25) * m * g : 0;
     T = clamp(T, 0, 4 * liftMax);
@@ -303,17 +392,21 @@ export class Vehicle {
     const pitch = Math.asin(clamp(fwd[1], -1, 1)) * 57.3;
     const roll = Math.atan2(-(this.right || [1, 0, 0])[1], up[1]) * 57.3;
     const ang = V(this.body.angvel()), pos = V(this.body.translation());
+    const g0 = this.gas0 || 1;
     return {
       t: this.time, speed: this.speed || 0, kmh: (this.speed || 0) * 3.6, vLong: this.vLong || 0,
       accel: len(this.accel) / val('gravity'), height: this.height, x: pos[0], y: pos[1], z: pos[2],
       pitch, roll, yawRate: dot(ang, up) * 57.3, angSpeed: len(ang) * 57.3,
-      gasKg: this.gas, gasPct: this.hasThrusters ? (100 * this.gas) / val('gasMass') : 0,
-      pressureBar: this.hasThrusters ? val('tankPressure') * (this.pRatio ?? 1) : 0,
+      gasKg: this.gas, gasPct: this.hasThrusters ? (100 * this.gas) / g0 : 0,
+      pressureBar: this.hasThrusters ? (this.tank.p || 0) / 1e5 : 0, tankK: this.tank ? this.tank.T : 0,
       thrustkN: (this.totalThrust || 0) / 1000, massFlow: this.massFlow || 0,
-      fankN: (this.fanForce || 0) / 1000, seal: this.seal || 0, contacts: this.contacts || 0,
+      fankN: (this.fanForce || 0) / 1000, fanKW: this.fan?.kw || 0, seal: this.seal || 0, contacts: this.contacts || 0,
       mass: this.mass, mode: this.mode, steerDeg: this.steerAngle * 57.3,
-      loads: this.wheels.map((w) => w.load / 1000), t60: this.t60,
+      loads: this.wheels.map((w) => w.load / 1000), slips: this.wheels.map((w) => w.slip), t60: this.t60,
       saturated: this.ctrl?.saturated || false, upY: up[1],
+      soc: this.battery.soc * 100, packV: this.battery.volts, packKW: this.battery.kw,
+      downforcekN: (this.downforce || 0) / 1000, wing: this.wing.mode, wingDeploy: this.wing.deploy,
+      latG: this.latG || 0, esc: this.escActive || 0, tcOn: this.tcActive || 0, absOn: this.absActive || 0,
     };
   }
 }

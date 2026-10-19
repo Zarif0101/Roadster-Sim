@@ -1,13 +1,15 @@
 // App shell: renderer + environment, fixed-step loop, input, cameras, HUD, "How it works" view, data tools.
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/OrbitControls.js';
-import { RoomEnvironment } from 'three/addons/RoomEnvironment.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import RAPIER from '../vendor/rapier.mjs';
 import { Vehicle } from './vehicle.js';
 import { buildWorld, SPAWNS, LOOP, KICK, PARK } from './world.js';
 import { buildCar } from './car.js';
 import { SCENES } from './scenes.js';
 import { P, THRUSTERS } from './params.js';
+import { hover as hoverClaim } from './physics/claims.js';
+const HOVER_S = hoverClaim().seconds; // full-tank hover time from the blowdown model
 
 const DT = 1 / 120;
 const $ = (id) => document.getElementById(id);
@@ -516,7 +518,7 @@ function updateHUD(dt) {
   } else { $('g-gas').textContent = '—'; $('g-gas-u').textContent = 'no thrusters'; $('g-gas-bar').style.width = 0; }
   $('tab-speed').textContent = t.kmh.toFixed(0);
   if (v.hasThrusters && !v.unlimited && t.massFlow > 0.5) $('g-gas-t').textContent = `empty in ${(t.gasKg / t.massFlow).toFixed(1)} s`;
-  else if (v.hasThrusters && !v.unlimited) $('g-gas-t').textContent = `≈ ${(t.gasKg / Math.max(1, (t.mass * 9.81) / P.exhaustVel.v)).toFixed(0)} s of hover`;
+  else if (v.hasLift && !v.unlimited) $('g-gas-t').textContent = `≈ ${(HOVER_S * Math.max(0, (t.gasPct - 40) / 60)).toFixed(1)} s of hover`;
   else $('g-gas-t').textContent = '';
   const chip = (txt, cls = '') => `<span class="chip ${cls}">${txt}</span>`;
   const modeTxt = activeScene ? 'AUTOPILOT' : { MANUAL: 'DRIVING', STABILIZE: 'AUTO-LEVEL', HOVER: `HOVER ${v.altTarget.toFixed(1)} m` }[v.mode];

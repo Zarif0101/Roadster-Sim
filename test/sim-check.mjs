@@ -3,7 +3,8 @@ import RAPIER from '../vendor/rapier.mjs';
 import { Vehicle } from '../src/vehicle.js';
 import { buildWorld, SPAWNS } from '../src/world.js';
 import { SCENES } from '../src/scenes.js';
-import { P } from '../src/params.js';
+import { P, THRUSTERS } from '../src/params.js';
+import { Cf, cStar } from '../src/physics/coldgas.js';
 await RAPIER.init();
 const DT = 1 / 120;
 const make = () => {
@@ -27,17 +28,19 @@ const check = (name, ok, info) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name
   const t = s.v.telemetry();
   check('settles on 4 wheels', t.contacts === 4 && t.speed < 0.05, `contacts=${t.contacts} speed=${t.speed.toFixed(3)} y=${t.y.toFixed(3)} loads=${t.loads.map(x=>x.toFixed(1))}`); }
 
-// Off-centre thruster torque: T9 (tail push left) alone, in the air, zero gravity
-{ const s = make(); s.world.gravity = { x: 0, y: 0, z: 0 }; s.v.reset([200, 50, 200], 0); s.v.unlimited = true; s.v.autoRescue = false; step(s);
-  const w0 = s.v.body.angvel().y; s.v.manual[8] = 1; step(s); const w = s.v.body.angvel();
-  // tau_y = r x F: r=(0,0,2.1), F=(-4000,0,0) -> tau_y = z*Fx = 2.1*-4000 = -8400 -> yaw right (negative)
-  const expW = (-8400 / (2900 * s.v.mass / 2300)) * DT;
-  check('T9 yaw torque sign/size', Math.abs(w.y - w0 - expW) / Math.abs(expW) < 0.05, `wy=${w.y.toExponential(3)} expected=${expW.toExponential(3)}`); }
+// Off-centre thruster torque: T9 (tail push left) alone, in the air, zero gravity, valve fully open
+{ const s = make(); s.world.gravity = { x: 0, y: 0, z: 0 }; s.v.reset([200, 50, 200], 0); s.v.unlimited = true; s.v.autoRescue = false;
+  s.v.manual[8] = 1; s.v.valve[8] = 1; step(s); const w0 = s.v.body.angvel().y; step(s); const w = s.v.body.angvel();
+  // tau_y = r x F: r=(0,0,2.1), F=(-Fmax,0,0) -> tau_y = z*Fx = -2.1*Fmax -> yaw right (negative)
+  const expW = ((-2.1 * THRUSTERS[8].max) / (2900 * s.v.mass / 2300)) * DT;
+  check('T9 yaw torque sign/size', Math.abs(w.y - w0 - expW) / Math.abs(expW) < 0.05, `dwy=${(w.y - w0).toExponential(3)} expected=${expW.toExponential(3)}`); }
 
-// Gas use over a known firing: T1+T2 full for 1 s -> 44000/700 = 62.9 kg
+// Gas use over a known firing: T1+T2 full for 1 s. Expected from choked-nozzle theory: mdot = F / (Cf * c*)
 { const s = make(); s.world.gravity = { x: 0, y: 0, z: 0 }; s.v.reset([200, 50, 200], 0); s.v.autoRescue = false;
-  const g0 = s.v.gas; s.v.manual[0] = s.v.manual[1] = 1; for (let i = 0; i < 120; i++) step(s);
-  check('gas consumption 1 s boost', Math.abs(g0 - s.v.gas - 62.86) < 1, `used=${(g0 - s.v.gas).toFixed(2)} kg`); }
+  const g0 = s.v.gas, T0 = s.v.tank.T; s.v.manual[0] = s.v.manual[1] = 1; for (let i = 0; i < 120; i++) step(s);
+  const F = THRUSTERS[0].max + THRUSTERS[1].max, ve = Cf(P.regPressure.v * 1e5, P.nozzleEps.v) * cStar((T0 + s.v.tank.T) / 2);
+  const exp = (F / ve) * (1 - 0.02 / 1); // first ~20 ms the valves are still opening
+  check('gas use, 1 s boost vs choked-flow theory', Math.abs(g0 - s.v.gas - exp) / exp < 0.03, `used=${(g0 - s.v.gas).toFixed(2)} kg, theory ${exp.toFixed(2)} kg, tank ${T0.toFixed(0)}->${s.v.tank.T.toFixed(0)} K`); }
 
 // Scenes
 for (const [key, sc] of Object.entries(SCENES)) {
