@@ -144,7 +144,7 @@ export class Environments {
     this.sun.shadow.mapSize.set(preset.shadow || 512, preset.shadow || 512); this.sun.castShadow = !!preset.shadow;
     if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
     this.pool.visible = false; this.spot.intensity = 0; this.spot.castShadow = false;
-    const flood = (I, color, angle) => { this.spot.intensity = I; this.spot.color.set(color); this.spot.angle = angle; this.spot.castShadow = !!preset.shadow; this.spot.shadow.mapSize.set(preset.shadow || 512, preset.shadow || 512); if (this.spot.shadow.map) { this.spot.shadow.map.dispose(); this.spot.shadow.map = null; } this.sun.castShadow = false; };
+    const flood = (I, color, angle) => { this.spot.intensity = this.spotBase = I; this.spot.color.set(color); this.spot.angle = angle; this.spot.castShadow = !!preset.shadow; this.spot.shadow.mapSize.set(preset.shadow || 512, preset.shadow || 512); if (this.spot.shadow.map) { this.spot.shadow.map.dispose(); this.spot.shadow.map = null; } this.sun.castShadow = false; };
     const D = this.dome.material.uniforms;
     if (name === 'showroom') {
       D.top.value.set(0x050506); D.horizon.value.set(0x0c0d0f); D.bottom.value.set(0x050506); D.glow.value.set(0x000000);
