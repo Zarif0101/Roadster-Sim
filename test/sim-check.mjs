@@ -3,7 +3,7 @@ import RAPIER from '../vendor/rapier.mjs';
 import { Vehicle } from '../src/vehicle.js';
 import { buildWorld, SPAWNS } from '../src/world.js';
 import { SCENES } from '../src/scenes.js';
-import { P, THRUSTERS } from '../src/params.js';
+import { P, THRUSTERS, INERTIA } from '../src/params.js';
 import { Cf, cStar } from '../src/physics/coldgas.js';
 await RAPIER.init();
 const DT = 1 / 120;
@@ -31,8 +31,8 @@ const check = (name, ok, info) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name
 // Off-centre thruster torque: T9 (tail push left) alone, in the air, zero gravity, valve fully open
 { const s = make(); s.world.gravity = { x: 0, y: 0, z: 0 }; s.v.reset([200, 50, 200], 0); s.v.unlimited = true; s.v.autoRescue = false;
   s.v.manual[8] = 1; s.v.valve[8] = 1; step(s); const w0 = s.v.body.angvel().y; step(s); const w = s.v.body.angvel();
-  // tau_y = r x F: r=(0,0,2.1), F=(-Fmax,0,0) -> tau_y = z*Fx = -2.1*Fmax -> yaw right (negative)
-  const expW = ((-2.1 * THRUSTERS[8].max) / (2900 * s.v.mass / 2300)) * DT;
+  // tau_y = r x F: r=(0,0,z), F=(-Fmax,0,0) -> tau_y = z*Fx = -z*Fmax -> yaw right (negative)
+  const expW = ((-THRUSTERS[8].pos[2] * THRUSTERS[8].max) / (INERTIA.y * s.v.mass / 2300)) * DT;
   check('T9 yaw torque sign/size', Math.abs(w.y - w0 - expW) / Math.abs(expW) < 0.05, `dwy=${(w.y - w0).toExponential(3)} expected=${expW.toExponential(3)}`); }
 
 // Gas use over a known firing: T1+T2 full for 1 s. Expected from choked-nozzle theory: mdot = F / (Cf * c*)

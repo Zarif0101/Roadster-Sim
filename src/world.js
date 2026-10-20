@@ -1,7 +1,7 @@
 // Test playground: physics colliders + a list of shapes for the renderer.
 // No three.js import so it also runs headless in Node.
 
-export const LOOP = { R: 9, z0: -60, x: 0, width: 7, segs: 64, ceilLen: 16 }; // reveal ramp: wide, large-radius curve (photo)
+export const LOOP = { R: 11, z0: -60, x: 0, width: 7, segs: 72, ceilLen: 18 }; // reveal ramp: wide, large-radius curve (photo)
 export const PARK = { lanes: [85, 97, 109, 121, 133, 145, 157, 169, 181] };
 export const KICK = { x: 40, zStart: -36, len: 8, angle: 15, cars: [
   { name: 'Model 3', L: 4.7, W: 1.85, H: 1.45, color: 0xb0302a },

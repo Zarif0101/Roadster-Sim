@@ -3,7 +3,7 @@
 // active wing, suction fans, cold-gas thrusters with a blowdown tank, and the flight controller.
 // Rapier integrates the rigid body; every force below is applied at its real point,
 // so torque comes out of r × F automatically. No three.js import, so this also runs headless in Node.
-import { P, TRIMS, THRUSTERS, WHEELS, SUSP_REST, INERTIA, val } from './params.js';
+import { P, TRIMS, THRUSTERS, WHEELS, SUSP_REST, INERTIA, CG, val } from './params.js';
 import * as tyre from './physics/tyre.js';
 import { driveTorques, brakeTorques, battery, newBattery } from './physics/powertrain.js';
 import { newTank, tankStep, massAt } from './physics/coldgas.js';
@@ -32,17 +32,17 @@ export const MODES = ['MANUAL', 'STABILIZE', 'HOVER'];
 const SUB = 8;              // tyre / wheel-spin sub-steps per physics step (960 Hz at 120 Hz)
 const SIDE_CA = 4.5;        // m², side area × side-force coefficient (crosswind)
 const TOP_CA = 7.0;         // m², plan area × drag coefficient when falling flat
-const BODY_HALF = [0.95, 0.33, 2.15];
 
 export class Vehicle {
   constructor(R, world, config = 'rocket') {
     this.R = R; this.world = world;
     this.body = world.createRigidBody(R.RigidBodyDesc.dynamic().setCanSleep(false).setCcdEnabled(true));
-    // Collision hull: chamfered nose and tail so the car can enter curved ramps (visual mesh is separate).
-    const hx = BODY_HALF[0], pts = [];
-    for (const sx of [-hx, hx]) pts.push(
-      sx, -0.25, -1.55,  sx, -0.25, 1.75,  sx, -0.02, -2.15,  sx, 0.02, 2.15,
-      sx, 0.42, -2.1,  sx, 0.42, 2.1,  sx * 0.65, 0.72, -0.4,  sx * 0.65, 0.72, 0.9);
+    // Collision hull from the measured body (4.52 × 2.0 × 1.19 m): chamfered nose and tail so it can enter
+    // curved ramps, floor 0.13 m above the road at rest. The visual mesh is separate.
+    const pts = [];
+    for (const sx of [-1, 1]) pts.push(
+      sx * 0.95, -0.33, -1.95,  sx * 0.95, -0.33, 1.75,  sx * 0.75, -0.2, -2.38,  sx * 0.8, -0.18, 2.12,
+      sx * 0.85, 0.06, -2.38,  sx * 0.86, 0.45, 2.12,  sx * 0.9, 0.32, -1.5,  sx * 0.6, 0.72, -0.3,  sx * 0.55, 0.72, 0.45,  sx * 0.97, 0.45, 1.2);
     this.collider = world.createCollider(
       R.ColliderDesc.convexHull(new Float32Array(pts)).setDensity(0).setFriction(0.6).setRestitution(0.1),
       this.body);
@@ -254,24 +254,24 @@ export class Vehicle {
     const air = sub(lin, wind), uF = dot(air, fwd), uS = dot(air, right), uU = dot(air, up);
     const ride = this.underGap ?? 0.3;
     wingLogic(this.wing, { speed: Math.max(0, uF), brake, latG: this.latG, airborne: contacts === 0 && this.height > 0.5, fans: this.fansOn, dt });
-    const aero = aeroForces(this.wing, Math.max(0, uF), Math.max(0, ride - 0.24));
+    const aero = aeroForces(this.wing, Math.max(0, uF), Math.max(0, ride - 0.06));
     if (Math.abs(uF) > 0.1) apply('drag', mul(fwd, -Math.sign(uF) * aero.drag), com);
     if (Math.abs(uS) > 0.1) apply('drag', mul(right, -0.5 * RHO * SIDE_CA * uS * Math.abs(uS)), add(com, mul(up, 0.1)));
     if (Math.abs(uU) > 0.5) apply('drag', mul(up, -0.5 * RHO * TOP_CA * uU * Math.abs(uU)), com);
     if (aero.bodyDown > 1) {
-      apply('drag', mul(up, -aero.bodyDown * 0.45), add(com, mul(fwd, 1.2)));
-      apply('drag', mul(up, -aero.bodyDown * 0.55), add(com, mul(fwd, -1.45)));
+      apply('drag', mul(up, -aero.bodyDown * 0.45), add(com, mul(fwd, 1.53)));
+      apply('drag', mul(up, -aero.bodyDown * 0.55), add(com, mul(fwd, -1.4)));
     }
-    if (aero.wingDown > 1) apply('drag', mul(up, -aero.wingDown), add(com, add(mul(fwd, -1.9), mul(up, 0.5))));
+    if (aero.wingDown > 1) apply('drag', mul(up, -aero.wingDown), add(com, add(mul(fwd, -1.9), mul(up, 0.6))));
     this.downforce = aero.bodyDown + aero.wingDown; this.dragF = aero.drag;
 
     // --- suction fans: fan curve against skirt leakage; only works near a surface ---
     this.fanLevel += ((this.fansOn ? 1 : 0) - this.fanLevel) * Math.min(1, dt / 0.3);
-    const under = this.ray(add(com, mul(up, -0.25)), mul(up, -1), 1.2);
+    const under = this.ray(add(com, mul(up, -0.3)), mul(up, -1), 1.2); // from the floor
     this.underGap = under ? under.toi : null;
     this.fan = fanSuction(this.fanLevel, under ? under.toi : 9);
     this.seal = this.fan.seal; this.fanForce = this.fan.force;
-    if (this.fanForce > 1) apply('fan', mul(up, -this.fanForce), add(com, mul(up, -0.25)));
+    if (this.fanForce > 1) apply('fan', mul(up, -this.fanForce), add(com, add(mul(up, -0.3), mul(fwd, -0.15))));
 
     // --- thrusters ---
     this.ctrl = { active: false };
@@ -311,7 +311,7 @@ export class Vehicle {
     this.accel = mul(sub(lin, this.prevVel), 1 / dt); this.prevVel = lin;
     this.latG += (dot(this.accel, right) / g - this.latG) * Math.min(1, dt * 8); // filtered like a real IMU readout
     const ground = this.ray(com, [0, -1, 0], 200);
-    this.height = ground ? ground.toi - 0.49 : 200;
+    this.height = ground ? ground.toi - CG.height : 200;
     if (this.launchT !== null && this.t60 === null && speed >= 26.82) { this.t60 = this.time - this.launchT; this.event(`0–60 mph in ${this.t60.toFixed(2)} s`); }
     this.up = up; this.fwd = fwd; this.right = right; this.speed = speed; this.vLong = vLongBody;
   }
@@ -376,7 +376,7 @@ export class Vehicle {
     const yawRate = dot(ang, up);
     const rT = o.yawRate ?? (this.mode === 'HOVER' && !rescue ? this.input.yawCmd * 1.2 : 0);
     const tauY = INERTIA.y * k * 4 * (rT - yawRate);
-    const per = Math.abs(tauY) / (2.05 * 2 * THRUSTERS[6].max * scale * avail);
+    const per = Math.abs(tauY) / ((Math.abs(THRUSTERS[6].pos[2]) + Math.abs(THRUSTERS[8].pos[2])) * THRUSTERS[6].max * scale * avail);
     const yawCmd = tauY > 0 ? [per, 0, 0, per] : [0, per, per, 0]; // T7+T10 = yaw left, T8+T9 = yaw right
     const out = cmd.slice();
     lift.forEach((x, i) => { out[2 + i] = Math.max(out[2 + i], clamp(x, 0, 1)); });

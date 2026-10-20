@@ -30,10 +30,10 @@ export const P = {
   regenG:       { v: 0.2,   unit: 'g',    tag: 'E', src: 'est. Tesla standard lift-off regen' },
   motorEff:     { v: 0.93,  unit: '×',    tag: 'E', src: 'est. motor + inverter efficiency' },
   // tyres + wheels
-  wheelRadius:  { v: 0.35,  unit: 'm',    tag: 'E', src: 'est. 20–21 in wheels, low-profile tyres' },
+  wheelRadius:  { v: 0.335, unit: 'm',    tag: 'E', src: 'measured from reveal photos (20 in rim, 30-series tyre)' },
   wheelInertia: { v: 1.6,   unit: 'kg·m²',tag: 'E', src: 'est. wheel + tyre + disc + reflected motor rotor' },
-  wheelbase:    { v: 2.65,  unit: 'm',    tag: 'E', src: 'est. from photos' },
-  track:        { v: 1.68,  unit: 'm',    tag: 'E', src: 'est. from photos' },
+  wheelbase:    { v: 2.93,  unit: 'm',    tag: 'E', src: 'measured from the side-profile reveal photo (scaled by tyre size)' },
+  track:        { v: 1.71,  unit: 'm',    tag: 'E', src: 'measured from the rear reveal photo (scaled by the US plate)' },
   tyreMu:       { v: 1.2,   unit: '—',    tag: 'E', src: 'est. dry grip of a track-oriented road tyre at nominal load', edit: [0.2, 2] },
   tyreFz0:      { v: 4500,  unit: 'N',    tag: 'E', src: 'nominal tyre load for the grip figure' },
   tyreLoadSens: { v: 0.1,   unit: '—',    tag: 'E', src: 'pacejka: grip drops ~10 % per doubling of load' },
@@ -51,7 +51,7 @@ export const P = {
   arbRear:      { v: 25000, unit: 'N/m',  tag: 'E', src: 'est. rear anti-roll bar' },
   // aero
   cd:           { v: 0.28,  unit: '—',    tag: 'E', src: 'est. wedge hypercar, wing stowed' },
-  frontalArea:  { v: 1.95,  unit: 'm²',   tag: 'E', src: 'est. 2.0 m wide × 1.15 m tall' },
+  frontalArea:  { v: 1.95,  unit: 'm²',   tag: 'E', src: 'est. 2.0 m wide × 1.19 m tall, measured from photos' },
   bodyClA:      { v: 0.25,  unit: 'm²',   tag: 'E', src: 'est. underbody downforce (diffuser)' },
   groundEffect: { v: 0.4,   unit: '×',    tag: 'E', src: 'est. extra underbody downforce near the road' },
   wingClA:      { v: 1.06,  unit: 'm²',   tag: 'R', src: 'patent: "up to 700 kg of downforce at top speed" → 6.87 kN at 103 m/s' },
@@ -61,7 +61,7 @@ export const P = {
   fanQmax:      { v: 4.2,   unit: 'm³/s', tag: 'H', src: 'hyp. free-flow capacity of the fan set' },
   skirtArea:    { v: 4.0,   unit: 'm²',   tag: 'E', src: 'est. sealed underbody area' },
   skirtPerim:   { v: 9.4,   unit: 'm',    tag: 'E', src: 'est. skirt perimeter' },
-  skirtReach:   { v: 0.37,  unit: 'm',    tag: 'H', src: 'hyp. sliding skirts with 12 cm travel below the floor (like the Chaparral 2J)' },
+  skirtReach:   { v: 0.28,  unit: 'm',    tag: 'H', src: 'hyp. sliding skirts with 12 cm travel below the floor (like the Chaparral 2J)' },
   skirtLeak:    { v: 0.003, unit: 'm',    tag: 'H', src: 'hyp. leak gap of a sealed skirt' },
   // cold gas (Rocket / Thrust trims)
   tankVolume:   { v: 600,   unit: 'L',    tag: 'R', src: 'reveal2026: 600 L of compressed air (COPV)' },
@@ -88,32 +88,35 @@ export const TRIMS = {
   rocket:      { name: 'Rocket',      seats: 1, extraMass: 120, tank: 600, nozzles: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] },
 };
 
-// 10 thrusters: count reported (2026). Total design thrust 94 kN ("over 80 kN", reported); layout + split hypothetical.
-// dir = direction of the FORCE on the car (exhaust points the other way).
+// 10 thrusters: count reported (2026). Total design thrust 94 kN ("over 80 kN", reported).
+// Positions follow the reveal photos: 4 boost nozzles in the rear diffuser (paired into T1/T2 here),
+// lift jets firing down just inboard of each wheel, small side-push nozzles in the nose and tail. Forces hypothetical.
+// Body frame: origin at the centre of mass (1.53 m behind the front axle, 0.46 m up). dir = FORCE on the car.
 export const THRUSTERS = [
-  { id: 'T1',  name: 'Rear boost L',  pos: [-0.2, -0.19, 2.29],  dir: [0, 0, -1], max: 20000, key: '1' },
-  { id: 'T2',  name: 'Rear boost R',  pos: [ 0.2, -0.19, 2.29],  dir: [0, 0, -1], max: 20000, key: '2' },
-  { id: 'T3',  name: 'Lift front L',  pos: [-0.85, -0.3, -1.75], dir: [0, 1, 0], max: 12000, key: '3' },
-  { id: 'T4',  name: 'Lift front R',  pos: [ 0.85, -0.3, -1.75], dir: [0, 1, 0], max: 12000, key: '4' },
-  { id: 'T5',  name: 'Lift rear L',   pos: [-0.85, -0.3,  1.95], dir: [0, 1, 0], max: 12000, key: '5' },
-  { id: 'T6',  name: 'Lift rear R',   pos: [ 0.85, -0.3,  1.95], dir: [0, 1, 0], max: 12000, key: '6' },
-  { id: 'T7',  name: 'Nose push L',   pos: [ 0.0,  0.0, -2.0],  dir: [-1, 0, 0], max: 1500, key: '7' },
-  { id: 'T8',  name: 'Nose push R',   pos: [ 0.0,  0.0, -2.0],  dir: [ 1, 0, 0], max: 1500, key: '8' },
-  { id: 'T9',  name: 'Tail push L',   pos: [ 0.0,  0.0,  2.1],  dir: [-1, 0, 0], max: 1500, key: '9' },
-  { id: 'T10', name: 'Tail push R',   pos: [ 0.0,  0.0,  2.1],  dir: [ 1, 0, 0], max: 1500, key: '0' },
+  { id: 'T1',  name: 'Rear boost L',  pos: [-0.24, 0.03, 2.12],  dir: [0, 0, -1], max: 20000, key: '1' },
+  { id: 'T2',  name: 'Rear boost R',  pos: [ 0.24, 0.03, 2.12],  dir: [0, 0, -1], max: 20000, key: '2' },
+  { id: 'T3',  name: 'Lift front L',  pos: [-0.6, -0.32, -2.15], dir: [0, 1, 0], max: 12000, key: '3' },
+  { id: 'T4',  name: 'Lift front R',  pos: [ 0.6, -0.32, -2.15], dir: [0, 1, 0], max: 12000, key: '4' },
+  { id: 'T5',  name: 'Lift rear L',   pos: [-0.6, -0.32,  1.88], dir: [0, 1, 0], max: 12000, key: '5' },
+  { id: 'T6',  name: 'Lift rear R',   pos: [ 0.6, -0.32,  1.88], dir: [0, 1, 0], max: 12000, key: '6' },
+  { id: 'T7',  name: 'Nose push L',   pos: [ 0.0,  0.0, -2.3],  dir: [-1, 0, 0], max: 1500, key: '7' },
+  { id: 'T8',  name: 'Nose push R',   pos: [ 0.0,  0.0, -2.3],  dir: [ 1, 0, 0], max: 1500, key: '8' },
+  { id: 'T9',  name: 'Tail push L',   pos: [ 0.0,  0.0,  2.05], dir: [-1, 0, 0], max: 1500, key: '9' },
+  { id: 'T10', name: 'Tail push R',   pos: [ 0.0,  0.0,  2.05], dir: [ 1, 0, 0], max: 1500, key: '0' },
 ];
 
-// Wheels: hardpoint (top of suspension travel) in body frame.
-const hw = 1.68 / 2;
+// Wheels: hardpoint (top of suspension travel) in body frame. 48/52 front/rear static weight.
+export const CG = { fromFrontAxle: 1.53, height: 0.46 };
+const hw = 1.71 / 2, fz = -CG.fromFrontAxle, rz = 2.93 - CG.fromFrontAxle;
 export const WHEELS = [
-  { id: 'FL', pos: [-hw, 0.1, -1.2], front: true },
-  { id: 'FR', pos: [ hw, 0.1, -1.2], front: true },
-  { id: 'RL', pos: [-hw, 0.1,  1.45], front: false },
-  { id: 'RR', pos: [ hw, 0.1,  1.45], front: false },
+  { id: 'FL', pos: [-hw, 0.12, fz], front: true },
+  { id: 'FR', pos: [ hw, 0.12, fz], front: true },
+  { id: 'RL', pos: [-hw, 0.12, rz], front: false },
+  { id: 'RR', pos: [ hw, 0.12, rz], front: false },
 ];
 export const SUSP_REST = 0.30;   // m, suspension length at zero load
 
 // Moments of inertia about CoM, body axes (pitch X, yaw Y, roll Z) for a 2,300 kg reference; scaled by mass.
-export const INERTIA = { x: 2600, y: 2900, z: 650 };
+export const INERTIA = { x: 2900, y: 3200, z: 650 }; // longer wheelbase than v3: more pitch/yaw inertia
 
 export const val = (k) => P[k].v;
