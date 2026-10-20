@@ -44,7 +44,7 @@ export class Pipeline {
       c.addPass(ao); this.ao = ao;
     }
     if (preset.bloom) {
-      const b = new UnrealBloomPass(new THREE.Vector2(w * preset.bloom, h * preset.bloom), 0.55, 0.5, 1.0);
+      const b = new UnrealBloomPass(new THREE.Vector2(w * preset.bloom, h * preset.bloom), 0.4, 0.45, this.bloomThreshold ?? 1.2);
       c.addPass(b); this.bloom = b;
     }
     this.dof = new BokehPass(this.scene, this.camera, { focus: 8, aperture: 0.004, maxblur: 0.008 }); this.dof.enabled = false; c.addPass(this.dof);
@@ -55,6 +55,7 @@ export class Pipeline {
     this.composer = c;
     this.setSize(w, h);
   }
+  setBloom(threshold) { this.bloomThreshold = threshold; if (this.bloom) this.bloom.threshold = threshold; }
   setSize(w, h) {
     if (!this.composer) return;
     this.composer.setSize(w, h);

@@ -80,7 +80,22 @@ function buildShell() {
   for (const s of ST) zs.push(s[0]);
   for (const z of [0.02, 0.04, 1.75, 1.77, 1.79, 1.86, 1.96, 2.52, 3.27]) zs.push(z);
   const zl = [...new Set(zs.map((z) => +z.toFixed(4)))].filter((z) => z >= -0.87 && z <= 3.65).sort((a, b) => a - b);
-  const rings = zl.map((zd) => { const { pts, well } = section(zd); const left = pts.slice(1, NP - 1).reverse().map(([x, y]) => [-x, y]); return { zd, well, p: [...pts, ...left] }; });
+  // Panels are slightly crowned between creases (real sheet metal is never dead flat): each section edge gets
+  // SUBD extra points pushed outward on a parabola, so light rolls across a panel while creases stay sharp.
+  const SUBD = 2;
+  const rings = zl.map((zd) => {
+    const { pts, well } = section(zd), left = pts.slice(1, NP - 1).reverse().map(([x, y]) => [-x, y]), loop = [...pts, ...left];
+    const cy = loop.reduce((s, q) => s + q[1], 0) / loop.length, p = [], seg = [];
+    loop.forEach((a, j) => {
+      const b = loop[(j + 1) % loop.length], sj = j < NP - 1 ? j : loop.length - 1 - j;
+      const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+      let nx = dy / (L || 1), ny = -dx / (L || 1);
+      if (nx * ((a[0] + b[0]) / 2) + ny * ((a[1] + b[1]) / 2 - cy) < 0) { nx = -nx; ny = -ny; }
+      const crown = sj >= 8 || (well && sj >= 6) || L < 0.06 ? 0 : Math.min(0.014, 0.035 * L);
+      for (let k = 0; k <= SUBD; k++) { const t = k / (SUBD + 1), c = 4 * t * (1 - t) * crown; p.push([a[0] + dx * t + nx * c, a[1] + dy * t + ny * c]); seg.push(sj); }
+    });
+    return { zd, well, p, seg };
+  });
   const n = rings[0].p.length;
   const groups = { body: [[], [], [], []], doorL: [[], [], [], []], doorR: [[], [], [], []] };
   const push = (g, m, a, b, c) => groups[g][m].push(...a, ...b, ...c);
@@ -88,7 +103,7 @@ function buildShell() {
   for (let i = 0; i < rings.length - 1; i++) {
     const A = rings[i], B = rings[i + 1], zm = (A.zd + B.zd) / 2, wellSeg = A.well && B.well;
     for (let j = 0; j < n; j++) {
-      const seg = j < NP - 1 ? j : n - 1 - j, side = j < NP - 1 ? 1 : -1;
+      const seg = A.seg[j], side = j < (NP - 1) * (SUBD + 1) ? 1 : -1;
       const a = A.p[j], b = A.p[(j + 1) % n], c = B.p[(j + 1) % n], d = B.p[j];
       const ym = (a[1] + b[1] + c[1] + d[1]) / 4;
       let m = matFor(seg, zm, ym);
@@ -140,7 +155,8 @@ export function buildCar() {
   const group = new THREE.Group();
   // ---------- materials ----------
   const paint = new THREE.MeshPhysicalMaterial({ color: 0xe9e8e3, metalness: 0.0, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.04, sheen: 0.25, sheenColor: 0xfff6ea, iridescence: 0.12, iridescenceIOR: 1.6 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x3b2618, metalness: 0.1, roughness: 0.04, transparent: true, opacity: 0.86, clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 1.4 });
+  // dark bronze, mirror-like canopy (photos #03, #22): mostly reflection, a little see-through
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x1c1009, metalness: 0.25, roughness: 0.03, transparent: true, opacity: 0.94, clearcoat: 1, clearcoatRoughness: 0.01, envMapIntensity: 0.9 });
   const black = new THREE.MeshStandardMaterial({ color: 0x0f1012, metalness: 0.2, roughness: 0.62 });
   const gloss = new THREE.MeshPhysicalMaterial({ color: 0x060607, metalness: 0.3, roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.05 });
   const carbon = new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: carbonTex(), metalness: 0.4, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.08 });
@@ -186,14 +202,14 @@ export function buildCar() {
     X(add(new THREE.BoxGeometry(0.012, 0.025, 0.08), emis(0xff2020, 2), P(s * 0.985, 0.59, 3.18)));   // side marker behind rear arch
     X(add(new THREE.BoxGeometry(0.012, 0.03, 0.09), emis(0xff6a1a, 2), P(s * 0.972, 0.68, 0.44)));    // front side marker (photo #24)
     const wedge = new THREE.Shape([[0, 0], [0.16, 0.045], [0.15, 0.06], [0, 0.022]].map(([a, b]) => new THREE.Vector2(a, b)));
-    const hl = X(add(new THREE.ExtrudeGeometry(wedge, { depth: 0.01, bevelEnabled: false }), emis(0xf4f7ff, 5), P(s * 0.66, 0.48, -0.84), [0, s > 0 ? -Math.PI / 2 - 0.35 : Math.PI / 2 + 0.35, 0]));
+    const hl = X(add(new THREE.ExtrudeGeometry(wedge, { depth: 0.01, bevelEnabled: false }), emis(0xf4f7ff, 2.2), P(s * 0.66, 0.48, -0.84), [0, s > 0 ? -Math.PI / 2 - 0.35 : Math.PI / 2 + 0.35, 0]));
     if (s < 0) hl.scale.x = -1;
   }
   X(add(new THREE.BoxGeometry(1.1, 0.008, 0.01), emis(0xf2f5ff, 4), P(0, 0.503, -0.874)));     // hood leading-edge light line
   X(add(new THREE.BoxGeometry(1.2, 0.14, 0.02), gloss, P(0, 0.19, -0.873)));                     // black lower intake
 
   // ---------- rear: plate, nozzle bar with 4 chrome boost nozzles, diffuser with fins and 4 lower ports ----------
-  X(add(new THREE.PlaneGeometry(0.305, 0.15), new THREE.MeshStandardMaterial({ map: plateTex(), roughness: 0.45, metalness: 0.3 }), P(0, 0.71, 3.656)));
+  X(add(new THREE.PlaneGeometry(0.305, 0.15), new THREE.MeshStandardMaterial({ map: plateTex(), roughness: 0.45, metalness: 0.3 }), P(0, 0.675, 3.656)));
   X(add(new THREE.BoxGeometry(0.12, 0.025, 0.02), gloss, P(0, 0.80, 3.66)));                      // camera pod
   X(add(new THREE.BoxGeometry(1.24, 0.13, 0.14), carbon, P(0, 0.49, 3.6)));                      // nozzle bar housing
   const nozzleRings = [];
@@ -202,10 +218,13 @@ export function buildCar() {
     X(add(new THREE.CylinderGeometry(0.038, 0.03, 0.06, 20, 1, true).rotateX(Math.PI / 2), black, P(x, 0.49, 3.65)));
     nozzleRings.push(ring);
   }
-  X(add(new THREE.BoxGeometry(1.24, 0.3, 0.5), carbon, P(0, 0.26, 3.42)));                        // diffuser body
-  for (const x of [-0.6, -0.31, 0, 0.31, 0.6]) X(add(new THREE.BoxGeometry(0.012, 0.24, 0.55), carbon, P(x, 0.22, 3.45)));
-  for (const x of [-0.45, -0.15, 0.15, 0.45]) X(add(new THREE.CylinderGeometry(0.055, 0.055, 0.02, 20).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x030303 }), P(x, 0.27, 3.672)));
-  for (const s of [-1, 1]) X(add(new THREE.BoxGeometry(0.3, 0.16, 0.5), black, P(s * 0.8, 0.5, 3.42))); // flank pods
+  // diffuser: recessed under the tail (the tail cap below 0.61 m is black), carbon floor ramp, five vertical fins, four lower ports
+  X(add(new THREE.PlaneGeometry(1.3, 0.7), carbon, P(0, 0.2, 3.35), [-Math.PI / 2 + 0.28, 0, 0]));
+  for (const x of [-0.62, -0.31, 0, 0.31, 0.62]) X(add(new THREE.BoxGeometry(0.01, 0.2, 0.6), carbon, P(x, 0.2, 3.36)));
+  for (const x of [-0.45, -0.15, 0.15, 0.45]) {
+    X(add(new THREE.RingGeometry(0.035, 0.055, 24), gloss, P(x, 0.29, 3.652), [0, 0, 0]));
+    X(add(new THREE.CircleGeometry(0.035, 20), new THREE.MeshBasicMaterial({ color: 0x050505 }), P(x, 0.29, 3.651)));
+  }
 
   // ---------- active wing: 4-bar linkage, swan-neck struts, red LED edges (photos #25, #05) ----------
   const wing = new THREE.Group();
@@ -242,10 +261,10 @@ export function buildCar() {
     const tyre = new THREE.Mesh(new THREE.LatheGeometry(tyreProfile(wid), 48).rotateZ(Math.PI / 2), tyreM); spin.add(tyre);
     const wall = new THREE.Mesh(new THREE.RingGeometry(0.262, 0.33, 64, 1), wallM); wall.rotation.y = side * Math.PI / 2; wall.position.x = side * (wid / 2 + 0.002); spin.add(wall);
     const face = new THREE.Mesh(new THREE.CylinderGeometry(0.255, 0.255, 0.012, 48).rotateZ(Math.PI / 2), faceM); face.position.x = side * (wid / 2 - 0.035); spin.add(face);
-    for (let k = 0; k < 5; k++) for (const off of [-0.07, 0.07]) {
+    for (let k = 0; k < 5; k++) for (const off of [-0.11, 0.11]) { // 5 split spokes: two blades per spoke, touching at the hub
       const arm = new THREE.Group(); arm.rotation.x = (k * 2 * Math.PI) / 5 + off;
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.2, 0.026), spokeM);
-      blade.position.set(side * (wid / 2 - 0.02), 0.135, 0); blade.rotation.x = -off * 2.2; arm.add(blade); spin.add(arm);
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.21, 0.022), spokeM);
+      blade.position.set(side * (wid / 2 - 0.02), 0.14, 0); blade.rotation.x = -off * 1.6; arm.add(blade); spin.add(arm);
     }
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.03, 24).rotateZ(Math.PI / 2), spokeM); cap.position.x = side * (wid / 2 - 0.01); spin.add(cap);
     const cover = new THREE.Mesh(new THREE.CylinderGeometry(0.262, 0.262, 0.02, 48).rotateZ(Math.PI / 2), coverM); cover.position.x = side * (wid / 2 - 0.005); cover.visible = false; spin.add(cover); covers.push(cover);
@@ -254,12 +273,6 @@ export function buildCar() {
     pivot.add(spin); group.add(pivot);
     return { pivot, spin, def: w };
   });
-  // wheel-well liners hide the inside of the body
-  for (const a of ARCH) for (const s of [-1, 1]) {
-    const liner = new THREE.Mesh(new THREE.CylinderGeometry(a.r - 0.005, a.r - 0.005, 0.3, 32, 1, true, Math.PI * 0.5, Math.PI).rotateZ(Math.PI / 2), black);
-    liner.material.side = THREE.DoubleSide; liner.position.set(s * 0.8, ty(R_TYRE), tz(a.z)); X(add(liner.geometry, black, liner.position.toArray()));
-  }
-
   // ---------- interior: tub, seats with red stripe, yoke, dash + centre screen (photos #04, #08, #20) ----------
   const cabin = new THREE.Group(); group.add(cabin); exterior.push(cabin);
   const seatW = new THREE.MeshStandardMaterial({ color: 0xe8e6e1, roughness: 0.55 }), seatB = new THREE.MeshStandardMaterial({ color: 0x1b1c1e, roughness: 0.7 });
@@ -347,7 +360,7 @@ export function buildCar() {
       view = v;
       const inside = v !== 'exterior';
       sys.visible = inside; edges.visible = inside; cabin.visible = !inside;
-      for (const m of allShell) { m.transparent = inside || m === glass; m.opacity = inside ? 0.07 : m === glass ? 0.86 : 1; m.depthWrite = !inside; m.needsUpdate = true; }
+      for (const m of allShell) { m.transparent = inside || m === glass; m.opacity = inside ? 0.07 : m === glass ? 0.93 : 1; m.depthWrite = !inside; m.needsUpdate = true; }
       exterior.forEach((o) => (o.visible = !inside));
       doors.forEach((d) => (d.visible = true));
       const show = (o, on) => o.traverse((c) => c.material && (c.material.opacity = on ? 1 : 0.12, c.material.transparent = true));

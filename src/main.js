@@ -1,13 +1,17 @@
 // App shell: renderer + environment, fixed-step loop, input, cameras, HUD, "How it works" view, data tools.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { Environments } from './render/env.js';
+import { buildWorldView } from './render/worldview.js';
+import { Pipeline } from './render/post.js';
+import { PRESETS, guessTier, AutoScaler } from './render/quality.js';
+import { canvasTex } from './render/tex.js';
 import RAPIER from '../vendor/rapier.mjs';
 import { Vehicle } from './vehicle.js';
 import { buildWorld, SPAWNS, LOOP, KICK, PARK } from './world.js';
 import { buildCar } from './car.js';
 import { SCENES } from './scenes.js';
-import { P, THRUSTERS } from './params.js';
+import { P, THRUSTERS, CG } from './params.js';
 import { hover as hoverClaim } from './physics/claims.js';
 const HOVER_S = hoverClaim().seconds; // full-tank hover time from the blowdown model
 
@@ -24,111 +28,32 @@ const v = new Vehicle(RAPIER, world, 'rocket');
 
 // ================= renderer + environment =================
 const canvas = $('view');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(1);
-renderer.toneMapping = THREE.NeutralToneMapping; renderer.toneMappingExposure = 0.92;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
-// white studio: floor fades into an endless light-grey backdrop
-const STUDIO = 0xd3d8de;
-scene.background = new THREE.Color(STUDIO);
-scene.fog = new THREE.Fog(STUDIO, 110, 360);
-const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-scene.environmentIntensity = 0.7;
-const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1200);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 6000);
 const controls = new OrbitControls(camera, canvas);
 controls.enabled = false; controls.enableDamping = true; controls.maxPolarAngle = Math.PI * 0.49;
-
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8c9198, 1.05));
-const key = new THREE.DirectionalLight(0xffffff, 2.6);
-key.position.set(-18, 40, 22); key.castShadow = true; key.shadow.mapSize.set(1024, 1024); key.shadow.bias = -0.0005;
-Object.assign(key.shadow.camera, { left: -14, right: 14, top: 14, bottom: -14, near: 1, far: 120 });
-scene.add(key, key.target);
-const rim = new THREE.DirectionalLight(0xffffff, 0.8); rim.position.set(25, 15, -30); scene.add(rim);
-
-function canvasTex(w, h, draw, rep) {
-  const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  if (rep) t.repeat.set(...rep); t.anisotropy = 4; return t;
+const envs = new Environments(renderer, scene);
+const pipeline = new Pipeline(renderer, scene, camera);
+const scaler = new AutoScaler(55);
+const gpu = guessTier(renderer);
+let qName = 'auto', preset = PRESETS[gpu.tier], envName = 'saltflat';
+try { qName = localStorage.getItem('roadster.quality') || 'auto'; envName = localStorage.getItem('roadster.env') || 'saltflat'; } catch {}
+function applyQuality(name) {
+  qName = name; preset = PRESETS[name === 'auto' ? gpu.tier : name];
+  scaler.scale = preset.pr[1]; renderer.setPixelRatio(Math.min(devicePixelRatio, preset.pr[1]));
+  renderer.shadowMap.enabled = !!preset.shadow;
+  const e = envs.set(envName, preset); pipeline.setBloom(e.bloom); pipeline.build(preset, innerWidth, innerHeight);
+  try { localStorage.setItem('roadster.quality', name); } catch {}
 }
-const noise = (g, w, h, base, n, a) => { g.fillStyle = base; g.fillRect(0, 0, w, h); for (let i = 0; i < n; i++) { g.fillStyle = `rgba(${Math.random() < 0.5 ? '255,240,220' : '0,0,0'},${Math.random() * a})`; g.fillRect(Math.random() * w, Math.random() * h, 2, 2); } };
-const floorTex = canvasTex(512, 512, (g, w, h) => {
-  g.fillStyle = '#9ea4ac'; g.fillRect(0, 0, w, h);
-  g.strokeStyle = 'rgba(40,45,52,.35)'; g.lineWidth = 3; g.strokeRect(0, 0, w, h);
-  g.strokeStyle = 'rgba(40,45,52,.12)'; g.lineWidth = 1;
-  for (let i = 1; i < 5; i++) { g.beginPath(); g.moveTo((i * w) / 5, 0); g.lineTo((i * w) / 5, h); g.moveTo(0, (i * h) / 5); g.lineTo(w, (i * h) / 5); g.stroke(); }
-}, [90, 90]);
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.85 }));
-floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
-const slab = (w, l, x, z, lines) => {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, l), new THREE.MeshStandardMaterial({ color: 0x5b6169, roughness: 0.85 }));
-  m.rotation.x = -Math.PI / 2; m.position.set(x, 0.01, z); m.receiveShadow = true; scene.add(m);
-  if (lines) for (const lx of [-w / 2 + 0.4, w / 2 - 0.4]) {
-    const ln = new THREE.Mesh(new THREE.PlaneGeometry(0.12, l), new THREE.MeshBasicMaterial({ color: 0xf2f3f5 }));
-    ln.rotation.x = -Math.PI / 2; ln.position.set(x + lx, 0.02, z); scene.add(ln);
-  }
-};
-slab(12, 140, KICK.x, -20, true);          // kickflip lane
-slab(14, 420, -60, -120, true);            // drag strip
-slab(8, 60, 0, -40, true);                 // ramp approach
-for (const x of PARK.lanes) slab(8, 110, x, -30, true); // test park lanes
-const hoverRing = new THREE.Mesh(new THREE.RingGeometry(3.7, 4, 64), new THREE.MeshBasicMaterial({ color: 0x3e6ae1 }));
-hoverRing.rotation.x = -Math.PI / 2; hoverRing.position.set(0, 0.03, 20); scene.add(hoverRing);
-
-function label3d(text, pos, color = '#ffffff') {
-  const t = canvasTex(512, 112, (g) => {
-    g.fillStyle = 'rgba(23,26,31,.88)'; g.beginPath(); g.roundRect(4, 8, 504, 96, 48); g.fill();
-    g.fillStyle = color; g.font = '500 46px "Segoe UI", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 256, 58);
-  });
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthWrite: false, transparent: true }));
-  s.scale.set(3.4, 0.75, 1); s.position.set(...pos); scene.add(s); return s;
+function applyEnv(name) {
+  envName = name; const e = envs.set(name, preset); pipeline.setBloom(e.bloom); view.root.visible = e.world;
+  P.gravity.v = e.gravity; world.gravity = { x: 0, y: -e.gravity, z: 0 };
+  try { localStorage.setItem('roadster.env', name); } catch {}
 }
-
-// parked vehicles get simple but readable car shapes; everything else is a box
-const glassM = new THREE.MeshStandardMaterial({ color: 0x0b0d10, metalness: 0.9, roughness: 0.1 });
-const tyreM = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
-function parkedCar(c, pos) {
-  const g = new THREE.Group(), paint = new THREE.MeshStandardMaterial({ color: c.color, metalness: 0.5, roughness: 0.35 });
-  const L = c.L, W = c.W, H = c.H;
-  if (c.name === 'Cybertruck') {
-    const s = new THREE.Shape([[-L / 2, 0.35], [-L / 2 + 0.2, 0.95], [-0.2, H], [L / 2, 1.1], [L / 2, 0.35]].map(([a, b]) => new THREE.Vector2(a, b)));
-    const m = new THREE.Mesh(new THREE.ExtrudeGeometry(s, { depth: W, bevelEnabled: false }), new THREE.MeshStandardMaterial({ color: c.color, metalness: 0.85, roughness: 0.3, flatShading: true }));
-    m.position.z = -W / 2; g.add(m);
-  } else if (c.name === 'Semi') {
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(2.6, H - 0.6, W), paint); cab.position.set(-L / 2 + 1.3, (H - 0.6) / 2 + 0.6, 0); g.add(cab);
-    const ws = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.0, W * 0.9), glassM); ws.position.set(-L / 2 - 0.01, H - 1.0, 0); g.add(ws);
-    const bed = new THREE.Mesh(new THREE.BoxGeometry(L - 2.6, 0.5, W * 0.8), new THREE.MeshStandardMaterial({ color: 0x2a2d31 })); bed.position.set(1.3, 0.85, 0); g.add(bed);
-  } else {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(L, H * 0.5, W), paint); body.position.y = 0.3 + H * 0.25; g.add(body);
-    const top = new THREE.Mesh(new THREE.BoxGeometry(L * 0.5, H * 0.42, W * 0.86), glassM); top.position.set(0.1, 0.3 + H * 0.5 + H * 0.2, 0); g.add(top);
-  }
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.25, 16).rotateX(Math.PI / 2), tyreM);
-    w.position.set(sx * (L / 2 - 0.85), 0.36, sz * (W / 2 - 0.12)); g.add(w);
-  }
-  g.position.set(pos[0], 0, pos[2]); g.traverse((o) => (o.castShadow = o.receiveShadow = true)); scene.add(g);
-}
-const concrete = new THREE.MeshStandardMaterial({ color: 0x7c838c, roughness: 0.55, metalness: 0.1, flatShading: true });
-for (const s of shapes) {
-  if (s.label === 'cone' || s.label === 'Slalom') {
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.75, 16), new THREE.MeshStandardMaterial({ color: 0xe85d1f, roughness: 0.6 }));
-    cone.position.set(s.pos[0], 0.375, s.pos[2]); cone.castShadow = true; scene.add(cone);
-    if (s.label === 'Slalom') label3d('Slalom', [s.pos[0] + 1.6, 2.2, s.pos[2] + 4]);
-    continue;
-  }
-  const car = KICK.cars.find((c) => c.name === s.label);
-  if (car) { parkedCar(car, s.pos); label3d(s.label, [s.pos[0] + 4.6, s.size[1] + 0.9, s.pos[2]]); continue; }
-  const mat = s.color === 0x8a939c ? concrete : new THREE.MeshStandardMaterial({ color: s.color, roughness: 0.7, flatShading: true });
-  const m = new THREE.Mesh(new THREE.BoxGeometry(...s.size), mat);
-  m.position.set(...s.pos); m.quaternion.set(s.quat.x, s.quat.y, s.quat.z, s.quat.w);
-  m.castShadow = m.receiveShadow = true; scene.add(m);
-  if (s.label && !['Ceiling section', 'Kicker', 'Wall'].includes(s.label)) label3d(s.label, [s.pos[0], Math.max(2.2, s.pos[1] + s.size[1] / 2 + 1.4), s.pos[2] + (s.label === 'Quarter pipe' ? 3 : 4)]);
-}
-label3d('Test park', [PARK.lanes[4], 3.2, 6]);
-label3d('Reveal ramp', [LOOP.x, 2 * LOOP.R + 2.4, LOOP.z0 - 2]);
-label3d('Kickflip lane', [KICK.x, 2.2, 18]);
-label3d('0–60 strip', [-60, 1.6, 58]);
+const view = buildWorldView(scene, shapes);
+const key = envs.sun; // shadow-casting light follows the car
 // ================= car + overlays =================
 const car = buildCar();
 scene.add(car.group);
@@ -222,6 +147,8 @@ addEventListener('keydown', (e) => {
     case 'KeyF': toggleFans(); break;
     case 'KeyC': setCam(['chase', 'side', 'orbit', 'top'][(['chase', 'side', 'orbit', 'top'].indexOf(camMode) + 1) % 4]); break;
     case 'KeyP': paused = !paused; toast(paused ? 'Paused (P)' : 'Running'); break;
+    case 'KeyQ': if (v.mode !== 'HOVER') { const o = ['auto', 'low', 'medium', 'high', 'ultra']; applyQuality(o[(o.indexOf(qName) + 1) % o.length]); toast('Graphics: ' + (qName === 'auto' ? `Auto (${PRESETS[gpu.tier].label})` : PRESETS[qName].label)); } break;
+    case 'KeyN': { const o = ['saltflat', 'night', 'showroom', 'mars']; applyEnv(o[(o.indexOf(envName) + 1) % o.length]); toast('World: ' + envs.name); } break;
     case 'Escape': $('help').style.display = 'none'; break;
   }
   if (e.code.startsWith('Digit') || e.code.startsWith('Shift')) needThr();
@@ -270,6 +197,7 @@ function updateCamera(dt) {
   if (f.length() > 0.3) flat.lerp(f.normalize(), 1 - Math.exp(-dt * 3)).normalize();
   const right = new THREE.Vector3(-flat.z, 0, flat.x);
   if (camMode === 'orbit') { controls.target.lerp(p, 0.15); controls.update(); return; }
+  if (camMode === 'fixed2') return; // debug pose set from outside
   let target;
   if (camMode === 'chase') target = p.clone().addScaledVector(flat, -7.2).add(new THREE.Vector3(0, 2.3, 0));
   else if (camMode === 'side') target = p.clone().addScaledVector(right, 7.5).addScaledVector(flat, 1.5).add(new THREE.Vector3(0, 1.4, 0));
@@ -480,16 +408,11 @@ function setSide(open) {
 $('side-close').onclick = () => setSide(false); $('side-tab').onclick = () => setSide(true);
 setSide(sideOpen);
 
-// auto quality: weak laptops drop real shadows (the soft blob shadow stays) after ~3 s below 35 fps
-let slowT = 0;
-function autoQuality() {
-  if (!renderer.shadowMap.enabled || !inSim) return;
-  slowT = fps < 35 ? slowT + 0.5 : 0;
-  if (slowT >= 3) {
-    renderer.shadowMap.enabled = false; key.castShadow = false;
-    scene.traverse((o) => { if (o.material) [].concat(o.material).forEach((m) => (m.needsUpdate = true)); });
-    toast('Low frame rate: shadows turned off to keep it smooth.');
-  }
+// auto quality: dynamic resolution inside the preset's range (Auto mode only)
+function autoQuality(dt) {
+  if (qName !== 'auto' || !inSim) return;
+  const r = scaler.sample(dt, preset.pr);
+  if (r && Math.abs(r.pr - renderer.getPixelRatio()) > 0.02) { renderer.setPixelRatio(r.pr); resize(); }
 }
 // ================= per-frame HUD =================
 let uiT = 0, fps = 60, fA = 0, fN = 0;
@@ -504,7 +427,8 @@ function caption(t) {
   }[car.view] || 'Pick a system above.';
 }
 function updateHUD(dt) {
-  fA += dt; fN++; if (fA > 0.5) { fps = fN / fA; fA = fN = 0; autoQuality(); }
+  fA += dt; fN++; if (fA > 0.5) { fps = fN / fA; fA = fN = 0; }
+  autoQuality(dt);
   uiT += dt; if (uiT < 0.1) return; uiT = 0;
   const t = v.telemetry();
   $('g-speed').textContent = t.kmh.toFixed(0);
@@ -542,7 +466,7 @@ function updateHUD(dt) {
 }
 
 // ================= loop =================
-function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); pipeline.setSize(innerWidth, innerHeight); }
 addEventListener('resize', resize); resize();
 let acc = 0, last = performance.now();
 function frame(now) {
@@ -553,14 +477,22 @@ function frame(now) {
   const tr = v.body.translation(), q = v.body.rotation();
   car.group.position.set(tr.x, tr.y, tr.z); car.group.quaternion.set(q.x, q.y, q.z, q.w);
   car.update(v, dt);
-  const gy = tr.y - (v.height ?? 0) - 0.49;
+  const gy = tr.y - (v.height ?? 0) - CG.height;
   blob.position.set(tr.x, gy + 0.03, tr.z); blob.rotation.z = Math.atan2(v.fwd[0], v.fwd[2]);
   blob.visible = v.height < 25; blob.material.opacity = Math.max(0, 1 - v.height / 8);
-  key.target.position.set(tr.x, tr.y, tr.z); key.position.set(tr.x - 30, tr.y + 45, tr.z + 35);
+  envs.update(car.group.position, camera);
   updateCamera(dt); updateOverlays(); updateLabels(); updateHUD(dt);
-  renderer.render(scene, camera);
+  pipeline.render(dt);
 }
+applyQuality(qName); applyEnv(envName);
 resetAll('pad'); syncButtons();
 $('loading').remove();
 requestAnimationFrame(frame);
-window.lab = { frame, renderer, scene, resize, v, car, camera, setCam, setView, startScene, go, shot: (x, y, z) => { fixedOff.set(x, y, z); camMode = 'fixed'; camPos.copy(car.group.position).add(fixedOff); look.copy(car.group.position); } }; // debug hook
+// debug: render one frame at w x h and post it to the dev server (serve.mjs saves shots/<name>.png)
+async function snap(name, w = 1600, h = 900) {
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); pipeline.setSize(w, h);
+  for (let i = 0; i < 3; i++) pipeline.render(1 / 60);
+  const blob = await new Promise((r) => canvas.toBlob(r));
+  resize(); await fetch('/__shot/' + name, { method: 'POST', body: blob }); return name;
+}
+window.lab = { frame, renderer, scene, resize, v, car, camera, envs, pipeline, applyQuality, applyEnv, snap, updateCamera, setCamPose: (p, l) => { camMode = 'fixed2'; camera.position.set(...p); camera.lookAt(...l); }, setCam, setView, startScene, go, shot: (x, y, z) => { fixedOff.set(x, y, z); camMode = 'fixed'; camPos.copy(car.group.position).add(fixedOff); look.copy(car.group.position); } }; // debug hook

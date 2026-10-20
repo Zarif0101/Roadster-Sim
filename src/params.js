@@ -33,7 +33,7 @@ export const P = {
   wheelRadius:  { v: 0.335, unit: 'm',    tag: 'E', src: 'measured from reveal photos (20 in rim, 30-series tyre)' },
   wheelInertia: { v: 1.6,   unit: 'kg·m²',tag: 'E', src: 'est. wheel + tyre + disc + reflected motor rotor' },
   wheelbase:    { v: 2.93,  unit: 'm',    tag: 'E', src: 'measured from the side-profile reveal photo (scaled by tyre size)' },
-  track:        { v: 1.71,  unit: 'm',    tag: 'E', src: 'measured from the rear reveal photo (scaled by the US plate)' },
+  track:        { v: 1.68,  unit: 'm',    tag: 'E', src: 'measured from the rear reveal photo (scaled by the US plate)' },
   tyreMu:       { v: 1.2,   unit: '—',    tag: 'E', src: 'est. dry grip of a track-oriented road tyre at nominal load', edit: [0.2, 2] },
   tyreFz0:      { v: 4500,  unit: 'N',    tag: 'E', src: 'nominal tyre load for the grip figure' },
   tyreLoadSens: { v: 0.1,   unit: '—',    tag: 'E', src: 'pacejka: grip drops ~10 % per doubling of load' },
@@ -107,7 +107,7 @@ export const THRUSTERS = [
 
 // Wheels: hardpoint (top of suspension travel) in body frame. 48/52 front/rear static weight.
 export const CG = { fromFrontAxle: 1.53, height: 0.46 };
-const hw = 1.71 / 2, fz = -CG.fromFrontAxle, rz = 2.93 - CG.fromFrontAxle;
+const hw = 1.68 / 2, fz = -CG.fromFrontAxle, rz = 2.93 - CG.fromFrontAxle;
 export const WHEELS = [
   { id: 'FL', pos: [-hw, 0.12, fz], front: true },
   { id: 'FR', pos: [ hw, 0.12, fz], front: true },

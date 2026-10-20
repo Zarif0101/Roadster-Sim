@@ -27,12 +27,12 @@ const REFS = {
   rear: { img: '../refs/25-Roadster_91.jpg', w: 2400, h: 1600, ax: 1202, ay: 1293, s: 666, view: 'rear' },
   front: { img: '../Screenshot 2026-10-18 020112.png', w: 509, h: 351, ax: 254, ay: 300, s: 205, view: 'front' },
 };
-const R = REFS[mode] || REFS.side;
+const R = mode === 'free' ? { ...REFS.side, w: +(q.get('w') || 1600), h: +(q.get('h') || 1000) } : REFS[mode] || REFS.side;
 const wrap = document.getElementById('wrap'), img = document.getElementById('ref');
 const fit = Math.min(innerWidth / R.w, innerHeight / R.h);
 wrap.style.width = R.w * fit + 'px'; wrap.style.height = R.h * fit + 'px';
 img.src = R.img; wrap.style.setProperty('--o', q.get('o') ?? 0.5);
-const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true, alpha: true });
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true, alpha: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(devicePixelRatio); renderer.setSize(R.w * fit, R.h * fit, false);
 renderer.toneMapping = THREE.AgXToneMapping;
 const scene = new THREE.Scene();
@@ -50,9 +50,24 @@ let cam;
 if (R.view === 'side') { cam = new THREE.OrthographicCamera(zOf(0), zOf(R.w), yOf(0), yOf(R.h), 0.1, 100); cam.position.set(-20, 0, 0); cam.up.set(0, 1, 0); cam.lookAt(0, 0, 0); }
 if (R.view === 'top') { cam = new THREE.OrthographicCamera(zOf(0), zOf(R.w), -(0 - R.ay) / R.s, -(R.h - R.ay) / R.s, 0.1, 100); cam.position.set(0, 20, 0); cam.up.set(-1, 0, 0); cam.lookAt(0, 0, 0); }
 if (R.view === 'rear' || R.view === 'front') { cam = new THREE.OrthographicCamera(xOf(0), xOf(R.w), yOf(0), yOf(R.h), 0.1, 100); const d = R.view === 'rear' ? 20 : -20; cam.position.set(0, 0, d); cam.lookAt(0, 0, 0); if (R.view === 'front') { cam.left = -xOf(0); cam.right = -xOf(R.w); } cam.updateProjectionMatrix(); }
-if (mode === 'free') { img.style.display = 'none'; cam = new THREE.PerspectiveCamera(30, R.w / R.h, 0.1, 100); cam.position.set(-5, 2, -6); new OrbitControls(cam, renderer.domElement); }
-let last = performance.now();
-(function loop(now) { requestAnimationFrame(loop); const dt = Math.min(0.05, (now - last) / 1000); last = now; if (fake.wheels.length) car.update(fake, dt); renderer.render(scene, cam); })(last);
+if (mode === 'free') { img.style.display = 'none'; cam = new THREE.PerspectiveCamera(+(q.get('fov') || 30), R.w / R.h, 0.1, 100); cam.position.set(...(q.get('cam') || '-5,2,-6').split(',').map(Number)); cam.lookAt(0, -0.1, 0); new OrbitControls(cam, renderer.domElement); }
+let last = performance.now(), frames = 0;
+const save = q.get('save');
+if (save) renderer.setSize(R.w * (+q.get('k') || 1), R.h * (+q.get('k') || 1), false); // full photo resolution, off-screen size
+const snap = () => { // composite photo + render and hand it to the dev server (serve.mjs saves shots/<name>.png)
+  for (let i = 0; i < 120; i++) car.update(fake, 1 / 30); // settle doors / wing without needing animation frames
+  renderer.render(scene, cam);
+  const c = document.createElement('canvas'), W = renderer.domElement.width, H = renderer.domElement.height; c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  if (mode === 'free') { g.fillStyle = '#16171a'; g.fillRect(0, 0, W, H); } else { g.drawImage(img, 0, 0, W, H); g.globalAlpha = 1 - (+(q.get('o') ?? 0.5)); }
+  g.drawImage(renderer.domElement, 0, 0, W, H);
+  c.toBlob((b) => fetch('/__shot/' + save, { method: 'POST', body: b }).then(() => (document.title = 'saved ' + save)));
+};
+if (save) { const go = () => (fake.wheels.length && (img.complete || mode === 'free') ? snap() : setTimeout(go, 100)); setTimeout(go, 300); }
+else (function loop(now) {
+  requestAnimationFrame(loop); const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (fake.wheels.length) car.update(fake, dt); renderer.render(scene, cam);
+})(last);
 document.getElementById('hud').textContent = `ref=${mode}  (side | top | rear | front | free)  o=${q.get('o') ?? 0.5}`;
 window.carlab = { car, scene, cam, renderer, fake };
 </script></body></html>
